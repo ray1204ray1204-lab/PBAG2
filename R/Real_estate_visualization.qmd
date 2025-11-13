@@ -1,0 +1,365 @@
+---
+title: "Real_Estate_Data"
+format: 
+  pdf:
+    toc: true
+---
+
+# Libraries
+
+```{r}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+```
+
+# Load Map Data
+
+First, we load the data map from the `.shp` file and get the corresponding geometries for the townships in Taiwan. For the scope of this project, we are only studying the data from Hsinchu County and City as well as Taipei City.
+
+```{r}
+# Load township-level shapefile
+map_data <- st_read("coords/TOWN_MOI_1140318.shp")
+```
+
+# Load Dataset
+
+The data set can is managed and accessed through the load_data script. This loads all of the data set necessary for this visualization. Afterwards, we view the `manifest.csv` to get a list of all the files from the Real Estate data set and their descriptions.
+
+```{r}
+suppressMessages(
+  suppressWarnings(
+    invisible(capture.output(source("load_data.R")))
+  )
+)
+
+# Look at the Metadata
+manifest_list <- real_estate_data[["manifest.csv"]]
+manifest_list
+```
+# Average Land Prices
+
+## Hsinchu
+
+In this section, we will try to analyze the elderly population data from Hsinchu City nd County and see its relationship with the average land prices.
+
+### Filter Hsinchu Data
+
+Here we get the real estate data of Hsinchu get only the columns `TOWNNAMES` as well their average land prices by getting the mean of all records per Township. Since Hsinchu City in the data doesn't have a record per district, we will get the data of the entire city and split them into three districts having the equal land value as the city itself.
+
+```{r}
+hsinchu <- list("j_lvr_land_a.csv", "o_lvr_land_a.csv") %>%
+  lapply(function(file) {
+    real_estate_data[[file]] %>%
+      {
+        colnames(.) <- as.character(unlist(.[1, ]))
+        .[-1, ]
+      } %>%
+      select(1, 13, 23)
+  }) %>%
+  bind_rows()
+
+
+hsinchu <- hsinchu %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+
+hsinchu_ave_price <- hsinchu %>%
+  group_by(TOWNNAME) %>%
+  summarise(
+    avg_price = mean(
+      as.numeric(str_replace_all(LANDPRICE, ",", "")),
+      na.rm = TRUE
+    )
+  )
+
+price_to_copy <- hsinchu_ave_price %>%
+  filter(TOWNNAME == "新竹市") %>%
+  pull(avg_price)
+
+hsinchu_ave_price <- hsinchu_ave_price %>%
+  add_row(
+    TOWNNAME = c("北區", "香山區", "東區"),
+    avg_price = price_to_copy
+  ) %>%
+  filter(TOWNNAME != "新竹市")
+
+hsinchu_ave_price
+```
+
+### Get Hsinchu Map Data
+
+```{r}
+hsinchu_map_data <- map_data %>%
+  filter(COUNTYNAME %in% c("新竹縣", "新竹市")) %>%
+  select(3, 4, 8)
+```
+
+### Merge Map and Average price
+
+After having the real estate data and their corresponding map coordinates. We'll merge the two tibbles together.
+
+```{r}
+hsinchu_map_data <- hsinchu_map_data %>%
+  left_join(hsinchu_ave_price, by = "TOWNNAME") %>%
+  replace_na(list(avg_price = NA))
+```
+
+### Bar Plot of Averge Land Prices in Hsinchu
+
+Here we will generate a plot of Hsinchu townships and districts vs their average land prices per square meter in TWD.
+
+```{r}
+ggplot(hsinchu_ave_price, aes(x = reorder(TOWNNAME, avg_price), y = avg_price)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(avg_price)), 
+            hjust = -0.1, 
+            size = 3.5) +
+  coord_flip() +
+  labs(
+    x = "Town",
+    y = "Average Unit Price (NTD / square meter)",
+    title = "Average Unit Price by Hsinchu Town/District"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+```
+
+### Heatmap of Average Land Prices in Hsinchu Plot
+
+This is also another visualization of Hsinchu land prices in heatmap form. Each color corresponds to the price.
+
+```{r}
+ggplot(hsinchu_map_data) +
+  geom_sf(aes(fill = avg_price), color = "white") +
+  geom_sf_text(aes(label = TOWNNAME), size = 3, color = "black") +
+  scale_fill_gradient(low = "lightblue", high = "darkred", na.value = "gray95") +
+  labs(
+    title = "Hsinchu Land Prices",
+    fill = "Avg Price (NTD)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggsave("hsinchu_map_large.png", plot = last_plot(), width = 13, height = 8, dpi = 300)
+```
+
+## Taipei City
+
+In this section, we will now do the same process but in Taipei City.
+
+### Filter Taipei Data
+
+```{r}
+taipei <- ("a_lvr_land_a.csv") %>%
+  lapply(function(file) {
+    real_estate_data[[file]] %>%
+      {
+        colnames(.) <- as.character(unlist(.[1, ]))
+        .[-1, ]
+      } %>%
+      select(1, 13, 23)
+  }) %>%
+  bind_rows()
+
+
+taipei <- taipei %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+
+taipei_ave_price <- taipei %>%
+  group_by(TOWNNAME) %>%
+  summarise(
+    avg_price = mean(
+      as.numeric(str_replace_all(LANDPRICE, ",", "")),
+      na.rm = TRUE
+    )
+  )
+
+taipei_ave_price
+```
+
+### Get Taipei Map Data
+
+```{r}
+taipei_map_data <- map_data %>%
+  filter(COUNTYNAME %in% c("臺北市")) %>%
+  select(3, 4, 8)
+```
+
+### Merge Map and Average price
+
+```{r}
+taipei_map_data <- taipei_map_data %>%
+  left_join(taipei_ave_price, by = "TOWNNAME") %>%
+  replace_na(list(avg_price = NA))
+```
+
+### Bar Plot of Averge Land Prices in Taipei City
+
+The bar plot below shows the average land price of Taipei City per districts.
+
+```{r}
+ggplot(taipei_ave_price, aes(x = reorder(TOWNNAME, avg_price), y = avg_price)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(avg_price)), 
+            hjust = -0.1, 
+            size = 3.5) +
+  coord_flip() +
+  scale_y_continuous(labels = label_number(accuracy = 1)) +
+  labs(
+    x = "Town",
+    y = "Average Unit Price (NTD / square meter)",
+    title = "Average Unit Price by Taipei District"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+### Heatmap of Average Land Prices in Taipei City Plot
+
+Below is the heatmap of Taipei city districts and their corresponding labd prices.
+
+```{r}
+ggplot(taipei_map_data) +
+  geom_sf(aes(fill = avg_price), color = "white") +
+  geom_sf_text(aes(label = TOWNNAME), size = 3, color = "black") +
+  scale_fill_gradient(low = "lightblue", high = "darkred", na.value = "gray95") +
+  labs(
+    title = "Taipei District Land Prices",
+    fill = "Avg Price (NTD)"
+  ) +
+  theme_minimal()
+```
+
+# Elderly Dependency Ratio and Average Lad Prices
+
+In this section, we will now try to see the elderly population and its relationship with the average land prices per townships and districts.
+
+## Hsinchu
+
+Here we try to get the data this time the `aging_data` from a different data set. In this part, we will try to extract the data and merge it from the tibble we made from previous stages.
+
+```{r}
+hsinchu_pop_data <- aging_data %>%
+  filter(COUNTY %in% c("新竹縣", "新竹市")) %>%
+  select(2, 4, 10) %>%
+  mutate(A65UP_A15A64_RAT = as.integer(A65UP_A15A64_RAT)) %>%
+  rename(TOWNNAME = TOWN)
+
+hsinchu_pop_data
+```
+
+```{r}
+hsinchu_map_data <- hsinchu_map_data %>%
+  left_join(hsinchu_pop_data, by = "TOWNNAME")
+
+
+hsinchu_map_data$avg_price <- as.numeric(hsinchu_map_data$avg_price)
+hsinchu_map_data$A65UP_A15A64_RAT <- as.numeric(hsinchu_map_data$A65UP_A15A64_RAT)
+```
+
+### Bar Plot of Average Land Prices with Elderly Dependency Ratio as Second Scale
+
+This plot demonstrates the comparison of the elderly dependency ratio vs average land prices per townships and districts in Hsinchu. This gives us an illustration of their relationship.
+
+```{r}
+
+# Compute scaling factor
+scale_factor <- max(hsinchu_map_data$avg_price, na.rm = TRUE) / max(hsinchu_map_data$A65UP_A15A64_RAT, na.rm = TRUE)
+
+ggplot(hsinchu_map_data, aes(x = TOWNNAME)) +
+  geom_col(aes(y = avg_price), fill = "steelblue", width = 0.4, position = position_nudge(x = -0.2)) +
+  geom_col(aes(y = A65UP_A15A64_RAT * scale_factor), fill = "orange", width = 0.4, position = position_nudge(x = 0.2)) +
+  scale_y_continuous(
+    name = "Average Land Price",
+    sec.axis = sec_axis(~./scale_factor, name = "Hsinchu Elderly Dependency Ratio")
+  ) +
+  coord_flip() +
+  theme_minimal()
+
+```
+
+### Scatter Plot
+
+The scatter plot shows us a better picture of the trend between the relationship of the elderly dependency ratio and the average land prices. In this case, we can see that the increase of the average land prices as an inverse relationship to the elderly dependency ratio.
+
+```{r}
+
+ggplot(hsinchu_map_data, aes(A65UP_A15A64_RAT, avg_price)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_smooth(method = "lm", color = "orange", se = FALSE) +
+  labs(
+    title = "Elderly Dependency Ratio and Average Land Price in Hsinchu",
+    x = "Dependency Ratio",
+    y = "Average Land Price (NTD / sqm)"
+  ) +
+  theme_minimal()
+
+```
+
+## Taipei City
+
+We will do the same process to Taipei City
+
+```{r}
+taipei_pop_data <- aging_data %>%
+  filter(COUNTY %in% c("臺北市")) %>%
+  select(2, 4, 10) %>%
+  mutate(A65UP_A15A64_RAT = as.integer(A65UP_A15A64_RAT)) %>%
+  rename(TOWNNAME = TOWN)
+
+taipei_pop_data
+```
+
+```{r}
+taipei_map_data <- taipei_map_data %>%
+  left_join(taipei_pop_data, by = "TOWNNAME")
+
+
+taipei_map_data$avg_price <- as.numeric(taipei_map_data$avg_price)
+taipei_map_data$A65UP_A15A64_RAT <- as.numeric(taipei_map_data$A65UP_A15A64_RAT)
+```
+
+### Bar Plot of Average Land Prices with Elderly Dependency Ratio as Second Scale
+
+```{r}
+# Compute scaling factor
+scale_factor <- max(taipei_map_data$avg_price, na.rm = TRUE) / max(taipei_map_data$A65UP_A15A64_RAT, na.rm = TRUE)
+
+ggplot(taipei_map_data, aes(x = TOWNNAME)) +
+  geom_col(aes(y = avg_price), fill = "steelblue", width = 0.4, position = position_nudge(x = -0.2)) +
+  geom_col(aes(y = A65UP_A15A64_RAT * scale_factor), fill = "orange", width = 0.4, position = position_nudge(x = 0.2)) +
+  scale_y_continuous(
+    name = "Average Land Price",
+    sec.axis = sec_axis(~./scale_factor, name = "Taipei Elderly Dependency Ratio")
+  ) +
+  coord_flip() +
+  theme_minimal()
+
+```
+
+### Scatter Plot
+
+In this scatter ploy, we can see an interesting trand where the increase of land prices has a directly proportional to the elderly dependency ratio.
+
+```{r}
+
+ggplot(taipei_map_data, aes(A65UP_A15A64_RAT, avg_price)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_smooth(method = "lm", color = "orange", se = FALSE) +
+  labs(
+    title = "Elderly Dependency Ratio and Average Land Price in Taipei",
+    x = "Dependency Ratio",
+    y = "Average Land Price (NTD / sqm)"
+  ) +
+  theme_minimal()
+
+```

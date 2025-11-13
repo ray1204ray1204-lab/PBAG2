@@ -1,0 +1,89 @@
+---
+title: "Hsinchu Aging Index"
+author: "TAANLEE114036606"
+date: "2025-11-02"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: ["ctex"]
+---
+
+```{r}
+
+# 套件載入
+library(readr)
+library(dplyr)
+library(ggplot2)
+# 讀取資料
+df <- read_csv("C:/Users/ray12/OneDrive/桌面/碩士課程114上/PBA程式設計與商業分析/final project/aging_medical_real_estate/data/population_index/aging_index_202412.csv", skip = 1)
+
+# 清理欄位名稱
+colnames(df) <- c("COUNTY_ID", "COUNTY", "TOWN_ID", "TOWN", "M_F_RAT", "P_H_CNT", "P_DEN", "DEPENDENCY_RAT",
+                  "A0A14_A15A65_RAT", "A65UP_A15A64_RAT", "A65_A0A14_RAT", "INFO_TIME")
+
+# 篩選出新竹地區（包含新竹市與新竹縣）
+df_hsinchu <- df %>% 
+  filter(COUNTY %in% c("新竹市", "新竹縣"))
+
+# 建立清理後版本：移除 NA、過低人口密度等異常值（可依需求調整）
+df_hsinchu_clean <- df_hsinchu %>% 
+  filter(!is.na(P_DEN), !is.na(DEPENDENCY_RAT), !is.na(A65UP_A15A64_RAT), !is.na(A65_A0A14_RAT)) %>% 
+  filter(P_DEN > 0)
+```
+
+```{r}
+ggplot(df_hsinchu %>% arrange(desc(A65_A0A14_RAT)),
+       aes(x = reorder(TOWN, A65_A0A14_RAT), y = A65_A0A14_RAT, fill = COUNTY)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(
+    title = "新竹地區老化指數（鄉鎮市區）\nAging Index in Hsinchu Region by Township",
+    x = "鄉鎮市區 Township",
+    y = "老化指數 Aging Index"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(df_hsinchu, aes(x = DEPENDENCY_RAT, y = A65UP_A15A64_RAT, size = P_DEN, color = TOWN)) +
+  geom_point(alpha = 0.7) +
+  geom_text(aes(label = TOWN), size = 2.5, vjust = -0.5, check_overlap = TRUE) +
+  labs(
+    title = "新竹地區扶養比與老年扶養比關係\nDependency vs. Elderly Dependency Ratio in Hsinchu",
+    x = "總扶養比 Total Dependency Ratio",
+    y = "老年扶養比 Elderly Dependency Ratio",
+    size = "人口密度 Population Density",
+    color = "鄉鎮市區 Township"
+  ) +
+  theme_light()
+
+```
+
+```{r}
+ggplot(df_hsinchu, aes(x = A65UP_A15A64_RAT, y = A65_A0A14_RAT, color = TOWN)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  geom_text(aes(label = TOWN), size = 2.5, vjust = -0.5, check_overlap = TRUE) +
+  labs(
+    title = "老年扶養比與老化指數的關聯\nElderly Dependency Ratio vs. Aging Index",
+    x = "老年扶養比 Elderly Dependency Ratio",
+    y = "老化指數 Aging Index",
+    color = "鄉鎮市區 Township"
+  ) +
+  theme_classic()
+```
+
+```{r}
+ggplot(df_hsinchu_clean, aes(x = P_DEN, y = DEPENDENCY_RAT, color = TOWN)) +
+  geom_point(alpha = 0.7) +
+  scale_x_log10() +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  geom_text(aes(label = TOWN), size = 2.5, vjust = -0.5, check_overlap = TRUE) +
+  labs(
+    title = "新竹地區人口密度（對數）與扶養比的關係\nLog(Population Density) vs. Dependency Ratio in Hsinchu",
+    x = "人口密度（log10 對數刻度）\nPopulation Density (log10 scale)",
+    y = "扶養比 Dependency Ratio",
+    color = "鄉鎮市區 Township"
+  ) +
+  theme_minimal()
+```
