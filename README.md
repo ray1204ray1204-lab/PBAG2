@@ -35,9 +35,9 @@ PBAG2/
 │ └── population_index/
 │   └── aging_index_202412.csv
 │
-├── R/
-│ ├── Aging_index_visualization.qmd
-│ ├── load_data.R
-│ ├── Real_estate_visualization.qmd
-│ ├── setup.R
+└── R/
+  ├── Aging_index_visualization.qmd
+  ├── load_data.R
+  ├── Real_estate_visualization.qmd
+  └── setup.R
 ```
