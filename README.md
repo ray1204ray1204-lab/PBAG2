@@ -8,6 +8,7 @@ It includes all source codes, datasets, reports, and results organized by functi
 
 ## Directory Structure
 
+```
 PBAG2/
 ├── data/
 │ ├── map/
@@ -39,4 +40,4 @@ PBAG2/
 │ ├── load_data.R
 │ ├── Real_estate_visualization.qmd
 │ ├── setup.R
-
+```
