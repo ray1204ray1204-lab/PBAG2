@@ -14,13 +14,41 @@ library(tidyr)
 library(scales)
 ```
 
+```{r}
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+```
+
+```{r}
+save_map_plot <- function(plot,
+                      filename,
+                      width = 13,
+                      height = 8,
+                      dpi = 300,
+                      folder = "plots") {
+
+  if (!dir.exists(folder)) {
+    dir.create(folder, recursive = TRUE)
+  }
+
+  filepath <- file.path(folder, filename)
+
+  ggsave(filepath,
+         plot = plot,
+         width = width,
+         height = height,
+         dpi = dpi)
+}
+```
+
 # Load Map Data
 
 First, we load the data map from the `.shp` file and get the corresponding geometries for the townships in Taiwan. For the scope of this project, we are only studying the data from Hsinchu County and City as well as Taipei City.
 
 ```{r}
 # Load township-level shapefile
-map_data <- st_read("coords/TOWN_MOI_1140318.shp")
+map_data <- map_data[["TOWN_MOI_1140318.shp"]]
 ```
 
 # Load Dataset
@@ -28,12 +56,6 @@ map_data <- st_read("coords/TOWN_MOI_1140318.shp")
 The data set can is managed and accessed through the load_data script. This loads all of the data set necessary for this visualization. Afterwards, we view the `manifest.csv` to get a list of all the files from the Real Estate data set and their descriptions.
 
 ```{r}
-suppressMessages(
-  suppressWarnings(
-    invisible(capture.output(source("load_data.R")))
-  )
-)
-
 # Look at the Metadata
 manifest_list <- real_estate_data[["manifest.csv"]]
 manifest_list
@@ -129,25 +151,25 @@ ggplot(hsinchu_ave_price, aes(x = reorder(TOWNNAME, avg_price), y = avg_price)) 
 
 ```
 
-### Heatmap of Average Land Prices in Hsinchu Plot
+### Heatmap of Average Land Prices in Hsinchu Plot and Save
 
 This is also another visualization of Hsinchu land prices in heatmap form. Each color corresponds to the price.
 
 ```{r}
-ggplot(hsinchu_map_data) +
-  geom_sf(aes(fill = avg_price), color = "white") +
-  geom_sf_text(aes(label = TOWNNAME), size = 3, color = "black") +
-  scale_fill_gradient(low = "lightblue", high = "darkred", na.value = "gray95") +
-  labs(
-    title = "Hsinchu Land Prices",
-    fill = "Avg Price (NTD)"
-  ) +
-  theme_minimal()
+hsinchu_map <- ggplot(hsinchu_map_data) +
+                  geom_sf(aes(fill = avg_price), color = "white") +
+                  geom_sf_text(aes(label = TOWNNAME), size = 3, color = "black") +
+                  scale_fill_gradient(low = "lightblue", high = "darkred", na.value = "gray95") +
+                  labs(
+                    title = "Hsinchu Land Prices",
+                    fill = "Avg Price (NTD)"
+                  ) +
+                  theme_minimal()
+
+hsinchu_map
+save_map_plot(hsinchu_map, "hsinchu_map_large.png")
 ```
 
-```{r}
-ggsave("hsinchu_map_large.png", plot = last_plot(), width = 13, height = 8, dpi = 300)
-```
 
 ## Taipei City
 
@@ -228,15 +250,18 @@ ggplot(taipei_ave_price, aes(x = reorder(TOWNNAME, avg_price), y = avg_price)) +
 Below is the heatmap of Taipei city districts and their corresponding labd prices.
 
 ```{r}
-ggplot(taipei_map_data) +
-  geom_sf(aes(fill = avg_price), color = "white") +
-  geom_sf_text(aes(label = TOWNNAME), size = 3, color = "black") +
-  scale_fill_gradient(low = "lightblue", high = "darkred", na.value = "gray95") +
-  labs(
-    title = "Taipei District Land Prices",
-    fill = "Avg Price (NTD)"
-  ) +
-  theme_minimal()
+taipei_map <- ggplot(taipei_map_data) +
+                geom_sf(aes(fill = avg_price), color = "white") +
+                geom_sf_text(aes(label = TOWNNAME), size = 3, color = "black") +
+                scale_fill_gradient(low = "lightblue", high = "darkred", na.value = "gray95") +
+                labs(
+                  title = "Taipei District Land Prices",
+                  fill = "Avg Price (NTD)"
+                ) +
+                theme_minimal()
+
+taipei_map
+save_map_plot(taipei_map, "taipei_map_large.png")
 ```
 
 # Elderly Dependency Ratio and Average Lad Prices
