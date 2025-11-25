@@ -1,8 +1,10 @@
 # PBAG2
 
-This repository contains the group project files for the **PBA Group Project** for the Fall Semester 2025
-.  
-It includes all source codes, datasets, reports, and results organized by function.
+ **PBA Group Project** for the Fall Semester 2025.  
+
+# Final Report Google Docs
+
+[Google Docs](https://docs.google.com/document/d/1Vk-OrHHNtGhHAGBT9LR5v8Ffv_rXLs71fQUtrqPSIPY/edit?usp=sharing)
 
 ---
 
