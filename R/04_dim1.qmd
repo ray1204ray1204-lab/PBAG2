@@ -1,0 +1,600 @@
+---
+title: "04_dim1"
+format: html
+editor: visual
+---
+
+## Dim1
+
+```{R}
+# ==============================================================================
+# Project: Medical Density Analysis (Taipei, New Taipei, Hsinchu City/County)
+# Script: medical_facilitate_4regions_eng.R
+# Features:
+#   1. Covers 4 Regions: Taipei, New Taipei, Hsinchu City, Hsinchu County.
+#   2. Full English translation for all districts in these regions.
+#   3. GitHub-friendly 'here' paths & output folder generation.
+# ==============================================================================
+
+# 1. Setup & Libraries
+# ------------------------------------------------------------------------------
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(readr, dplyr, stringr, ggplot2, here)
+
+# Create 'output' directory
+output_dir <- here("output")
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
+}
+
+# ------------------------------------------------------------------------------
+# 2. Comprehensive English Translation Index
+# ------------------------------------------------------------------------------
+
+# A. Region & Level Mapping
+common_map <- c(
+  "臺北市" = "Taipei City",
+  "新北市" = "New Taipei City",
+  "新竹市" = "Hsinchu City",
+  "新竹縣" = "Hsinchu County",
+  
+  "醫學中心" = "Medical Center",
+  "區域醫院" = "Regional Hospital",
+  "地區醫院" = "Local Hospital",
+  "診所"     = "Clinic",
+  "藥局"     = "Pharmacy"
+)
+
+# B. District Mapping (Taipei + New Taipei + Hsinchu)
+district_map <- c(
+  # --- Hsinchu County (Updated: Hukou, Xinfeng, Qionglin added) ---
+  "竹北市" = "Zhubei City",      "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",   "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",   "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township","橫山鄉" = "Hengshan Township",
+  "北埔鄉" = "Beipu Township",   "寶山鄉" = "Baoshan Township",
+  "峨眉鄉" = "Emei Township",    "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township",
+  
+  # --- Hsinchu City ---
+  "東區"   = "East Dist.", "北區" = "North Dist.", "香山區" = "Xiangshan Dist.",
+  
+  # --- Taipei City (12 Districts) ---
+  "中正區" = "Zhongzheng Dist.", "大同區" = "Datong Dist.",
+  "中山區" = "Zhongshan Dist.",  "松山區" = "Songshan Dist.",
+  "大安區" = "Da'an Dist.",      "萬華區" = "Wanhua Dist.",
+  "信義區" = "Xinyi Dist.",      "士林區" = "Shilin Dist.",
+  "北投區" = "Beitou Dist.",     "內湖區" = "Neihu Dist.",
+  "南港區" = "Nangang Dist.",    "文山區" = "Wenshan Dist.",
+  
+  # --- New Taipei City (Major Districts) ---
+  "板橋區" = "Banqiao Dist.",    "三重區" = "Sanchong Dist.",
+  "中和區" = "Zhonghe Dist.",    "永和區" = "Yonghe Dist.",
+  "新莊區" = "Xinzhuang Dist.",  "新店區" = "Xindian Dist.",
+  "土城區" = "Tucheng Dist.",    "蘆洲區" = "Luzhou Dist.",
+  "汐止區" = "Xizhi Dist.",      "樹林區" = "Shulin Dist.",
+  "淡水區" = "Tamsui Dist.",     "鶯歌區" = "Yingge Dist.",
+  "三峽區" = "Sanxia Dist.",     "五股區" = "Wugu Dist.",
+  "泰山區" = "Taishan Dist.",    "林口區" = "Linkou Dist.",
+  "深坑區" = "Shenkeng Dist.",   "石碇區" = "Shiding Dist.",
+  "坪林區" = "Pinglin Dist.",    "三芝區" = "Sanzhi Dist.",
+  "石門區" = "Shimen Dist.",     "八里區" = "Bali Dist.",
+  "平溪區" = "Pingxi Dist.",     "雙溪區" = "Shuangxi Dist.",
+  "貢寮區" = "Gongliao Dist.",   "金山區" = "Jinshan Dist.",
+  "萬里區" = "Wanli Dist.",      "烏來區" = "Wulai Dist.",
+  "瑞芳區" = "Ruifang Dist."
+)
+
+# Helper function
+translate_text <- function(x, map) {
+  res <- map[x]
+  # If translation missing, return original Chinese so we notice it
+  ifelse(is.na(res), x, res) 
+}
+
+# ------------------------------------------------------------------------------
+# 3. Load Data
+# ------------------------------------------------------------------------------
+cat("Loading data...\n")
+
+# Use 'here' for paths
+file_med_center <- here("data", "medical_facilities", "medical_center_202510.csv")
+file_regional   <- here("data", "medical_facilities", "hospital_regional_202510.csv")
+file_local      <- here("data", "medical_facilities", "hospital_local_202510.csv")
+file_clinic     <- here("data", "medical_facilities", "clinic_202510.csv")
+file_pharmacy   <- here("data", "medical_facilities", "pharmacy_202510.csv")
+
+safe_read_csv <- function(path, level_label) {
+  if (!file.exists(path)) return(NULL)
+  read_csv(path, col_types = cols(.default = "c"), show_col_types = FALSE) %>%
+    mutate(Level_Chi = level_label)
+}
+
+df_all <- bind_rows(
+  safe_read_csv(file_med_center, "醫學中心"),
+  safe_read_csv(file_regional,   "區域醫院"),
+  safe_read_csv(file_local,      "地區醫院"),
+  safe_read_csv(file_clinic,     "診所"),
+  safe_read_csv(file_pharmacy,   "藥局")
+)
+
+# ------------------------------------------------------------------------------
+# 4. Data Processing (4 Regions)
+# ------------------------------------------------------------------------------
+cat("Processing 4 Regions (Taipei, New Taipei, Hsinchu City/County)...\n")
+
+df_processed <- df_all %>%
+  # 1. Filter for all 4 regions
+  filter(str_detect(地址, "臺北市|新北市|新竹市|新竹縣")) %>%
+  mutate(
+    # 2. Extract Region (Normalized)
+    Region_Chi = case_when(
+      str_detect(地址, "臺北市") ~ "臺北市",
+      str_detect(地址, "新北市") ~ "新北市",
+      str_detect(地址, "新竹市") ~ "新竹市",
+      str_detect(地址, "新竹縣") ~ "新竹縣",
+      TRUE ~ NA_character_
+    ),
+    # 3. Extract District using Regex
+    District_Chi = str_match(地址, "(臺北市|新北市|新竹市|新竹縣)([^縣市區鄉鎮]+[市區鄉鎮])")[, 3]
+  ) %>%
+  filter(!is.na(District_Chi)) %>%
+  
+  # 4. TRANSLATION
+  mutate(
+    Region   = translate_text(Region_Chi, common_map),
+    District = translate_text(District_Chi, district_map),
+    Level    = translate_text(Level_Chi, common_map)
+  ) %>%
+  
+  # 5. Set Logic Order for Factors (North -> South / Hierarchy)
+  mutate(
+    Level = factor(Level, levels = c("Medical Center", "Regional Hospital", "Local Hospital", "Clinic", "Pharmacy")),
+    # Order: Taipei -> New Taipei -> Hsinchu City -> Hsinchu County
+    Region = factor(Region, levels = c("Taipei City", "New Taipei City", "Hsinchu City", "Hsinchu County"))
+  ) %>%
+  
+  # 6. Count
+  group_by(Region, District, Level) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  
+  # 7. Calculate Totals for Plot Sorting
+  group_by(Region, District) %>%
+  mutate(DistrictTotal = sum(Count)) %>%
+  ungroup()
+
+# ------------------------------------------------------------------------------
+# 5. Visualization
+# ------------------------------------------------------------------------------
+
+# --- Plot 1: Key Hospitals (All 4 Regions) ---
+cat("Generating Plot 1: Key Hospitals (All Regions)...\n")
+data_hospitals <- df_processed %>%
+  filter(Level %in% c("Medical Center", "Regional Hospital", "Local Hospital"))
+
+if(nrow(data_hospitals) > 0) {
+  p1 <- ggplot(data_hospitals, aes(x = reorder(District, -DistrictTotal), y = Count, fill = Level)) +
+    geom_col(position = "stack") +
+    geom_text(aes(label = Count), position = position_stack(vjust = 0.5), color = "white", size = 2.5) +
+    
+    # Facet by Region (Free scales allows each region to have its own district list)
+    facet_wrap(~ Region, scales = "free", ncol = 2) +
+    
+    labs(
+      title = "Key Medical Facilities Distribution (Taipei Metro & Hsinchu)",
+      subtitle = "Medical Centers, Regional & Local Hospitals",
+      x = NULL, # Hide x label to save space
+      y = "Number of Facilities",
+      fill = "Facility Level",
+      caption = "Source: Open Data | PBAG2 Project"
+    ) +
+    
+    theme_minimal(base_family = "Arial") +
+    theme(
+      plot.title = element_text(face = "bold", size = 16),
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8), # Vertical text for many districts
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold", size = 12)
+    )
+  
+  print(p1)
+  ggsave(here("output", "AllRegions_Hospitals_Eng.png"), p1, width = 14, height = 10, bg = "white")
+}
+
+# --- Plot 2: Primary Care (All 4 Regions) ---
+cat("Generating Plot 2: Primary Care (All Regions)...\n")
+data_primary <- df_processed %>%
+  filter(Level %in% c("Clinic", "Pharmacy"))
+
+if(nrow(data_primary) > 0) {
+  p2 <- ggplot(data_primary, aes(x = reorder(District, -DistrictTotal), y = Count, fill = Level)) +
+    geom_col() +
+    
+    facet_wrap(~ Region, scales = "free", ncol = 2) +
+    
+    labs(
+      title = "Primary Care Resources (Taipei Metro & Hsinchu)",
+      subtitle = "Clinics and Pharmacies",
+      x = NULL,
+      y = "Count",
+      fill = "Type",
+      caption = "Source: Open Data | PBAG2 Project"
+    ) +
+    
+    theme_minimal(base_family = "Arial") +
+    theme(
+      plot.title = element_text(face = "bold", size = 16),
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold", size = 12)
+    )
+  
+  print(p2)
+  ggsave(here("output", "AllRegions_PrimaryCare_Eng.png"), p2, width = 14, height = 10, bg = "white")
+}
+
+cat("\nDone! Check the 'output' folder for 4-region charts.\n")
+```
+
+```{R}
+#12221101
+# ==============================================================================
+# Project: Real Estate & Medical Analysis (English Report Version)
+# Focus: 
+#   1. Combined Plot (All Regions)
+#   2. Individual Plots (Taipei, New Taipei, Hsinchu County)
+#   3. Skip Hsinchu City Plot (with Note)
+#   4. Bubble Size = Aging Index
+#   5. English Labels for all Districts
+# ==============================================================================
+
+rm(list = ls()) # Clear environment
+
+# Load required packages
+packages <- c("readr", "dplyr", "stringr", "ggplot2", "tidyr", "ggrepel", "here", "scales")
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# ------------------------------------------------------------------------------ 
+# 0. Define Translation Index (Chinese -> English)
+# ------------------------------------------------------------------------------ 
+# 為了英文報告，我們先定義好翻譯字典
+region_map <- c(
+  "臺北市" = "Taipei City",
+  "新北市" = "New Taipei City",
+  "新竹市" = "Hsinchu City",
+  "新竹縣" = "Hsinchu County"
+)
+
+# 常見行政區翻譯 (可根據實際資料擴充)
+district_map <- c(
+  # Taipei
+  "中正區"="Zhongzheng", "大同區"="Datong", "中山區"="Zhongshan", "松山區"="Songshan", 
+  "大安區"="Da'an", "萬華區"="Wanhua", "信義區"="Xinyi", "士林區"="Shilin", 
+  "北投區"="Beitou", "內湖區"="Neihu", "南港區"="Nangang", "文山區"="Wenshan",
+  # New Taipei (部分主要區域，若有缺漏會顯示原名或拼音)
+  "板橋區"="Banqiao", "三重區"="Sanchong", "中和區"="Zhonghe", "永和區"="Yonghe", 
+  "新莊區"="Xinzhuang", "新店區"="Xindian", "樹林區"="Shulin", "鶯歌區"="Yingge", 
+  "三峽區"="Sanxia", "淡水區"="Tamsui", "汐止區"="Xizhi", "瑞芳區"="Ruifang",
+  "土城區"="Tucheng", "蘆洲區"="Luzhou", "五股區"="Wugu", "泰山區"="Taishan",
+  "林口區"="Linkou", "深坑區"="Shenkeng", "石碇區"="Shiding", "坪林區"="Pinglin",
+  "三芝區"="Sanzhi", "石門區"="Shimen", "八里區"="Bali", "平溪區"="Pingxi",
+  "雙溪區"="Shuangxi", "貢寮區"="Gongliao", "金山區"="Jinshan", "萬里區"="Wanli", "烏來區"="Wulai",
+  # Hsinchu City
+  "新竹市"="Hsinchu City", # Aggregated
+  # Hsinchu County
+  "竹北市"="Zhubei", "竹東鎮"="Zhudong", "新埔鎮"="Xinpu", "關西鎮"="Guanxi", 
+  "湖口鄉"="Hukou", "新豐鄉"="Xinfeng", "芎林鄉"="Qionglin", "橫山鄉"="Hengshan", 
+  "北埔鄉"="Beipu", "寶山鄉"="Baoshan", "峨眉鄉"="Emei", "尖石鄉"="Jianshi", "五峰鄉"="Wufeng"
+)
+
+translate_district <- function(name) {
+  if (name %in% names(district_map)) return(district_map[name])
+  return(name) # Return original if not found
+}
+
+translate_region <- function(name) {
+  if (name %in% names(region_map)) return(region_map[name])
+  return(name)
+}
+
+# ------------------------------------------------------------------------------ 
+# 1. Process Medical Data
+# ------------------------------------------------------------------------------ 
+safe_read_csv <- function(file_path, level_name) {
+  if (!file.exists(file_path)) stop(paste("File not found:", file_path))
+  read_csv(file_path, col_types = cols(.default = "c"), show_col_types = FALSE) %>% 
+    mutate(Level = level_name)
+}
+
+df_med <- bind_rows(
+  safe_read_csv(here("data/medical_facilities/medical_center_202510.csv"), "Medical Center"),
+  safe_read_csv(here("data/medical_facilities/hospital_regional_202510.csv"), "Regional Hospital"),
+  safe_read_csv(here("data/medical_facilities/hospital_local_202510.csv"), "Local Hospital"),
+  safe_read_csv(here("data/medical_facilities/clinic_202510.csv"), "Clinic"),
+  safe_read_csv(here("data/medical_facilities/pharmacy_202510.csv"), "Pharmacy")
+)
+
+medical_summary <- df_med %>%
+  filter(str_detect(地址, "臺北市|新北市|新竹市|新竹縣")) %>%
+  mutate(
+    Region_Chi = case_when(
+      str_detect(地址, "臺北市") ~ "臺北市",
+      str_detect(地址, "新北市") ~ "新北市",
+      str_detect(地址, "新竹市") ~ "新竹市",
+      str_detect(地址, "新竹縣") ~ "新竹縣",
+      TRUE ~ NA_character_
+    ),
+    Raw_District = str_match(地址, "(臺北市|新北市|新竹市|新竹縣)([^縣市區鄉鎮]+[市區鄉鎮])")[, 3]
+  ) %>%
+  filter(!is.na(Region_Chi) & !is.na(Raw_District)) %>%
+  mutate(
+    District_Chi = if_else(Region_Chi == "新竹市", "新竹市", Raw_District)
+  ) %>%
+  count(Region_Chi, District_Chi, Level) %>%
+  pivot_wider(names_from = Level, values_from = n, values_fill = 0)
+
+# ------------------------------------------------------------------------------ 
+# 2. Process Real Estate Data (LVR)
+# ------------------------------------------------------------------------------ 
+read_lvr <- function(path, region_chi) {
+  p1 <- here(path)
+  p2 <- here("data", path)
+  target <- if(file.exists(p1)) p1 else if(file.exists(p2)) p2 else NULL
+  
+  if (is.null(target)) return(NULL)
+  read_csv(target, col_types = cols(.default = "c"), show_col_types = FALSE) %>% mutate(Region_Chi = region_chi)
+}
+
+df_lvr <- bind_rows(
+  read_lvr("data/lvr_landcsv114Q3/a_lvr_land_a.csv", "臺北市"),
+  read_lvr("data/lvr_landcsv114Q3/f_lvr_land_a.csv", "新北市"), 
+  read_lvr("data/lvr_landcsv114Q3/o_lvr_land_a.csv", "新竹市"),
+  read_lvr("data/lvr_landcsv114Q3/j_lvr_land_a.csv", "新竹縣")
+)
+
+lvr_summary <- df_lvr %>%
+  filter(`交易標的` == "房地(土地+建物)", `主要用途` == "住家用") %>%
+  mutate(
+    Price_Per_M2 = as.numeric(`單價元平方公尺`),
+    District_Chi = `鄉鎮市區` 
+  ) %>%
+  filter(!is.na(Price_Per_M2) & Price_Per_M2 > 0) %>%
+  group_by(Region_Chi, District_Chi) %>%
+  summarise(Avg_Unit_Price = mean(Price_Per_M2, na.rm = TRUE), .groups = "drop")
+
+# ------------------------------------------------------------------------------ 
+# 3. Process Aging Data
+# ------------------------------------------------------------------------------ 
+df_aging_raw <- read_csv(here("data/population_index/aging_index_202412.csv"), skip = 1, show_col_types = FALSE)
+colnames(df_aging_raw) <- c("CID", "COUNTY", "TID", "TOWN", "M_F", "PH", "PDEN", "DEP_RAT", "YOUNG_RAT", "OLD_RAT", "AGING_IDX", "TIME")
+
+aging_summary <- df_aging_raw %>%
+  filter(COUNTY %in% c("臺北市", "新北市", "新竹市", "新竹縣")) %>%
+  rename(Region_Chi = COUNTY, Raw_District = TOWN) %>%
+  mutate(
+    Aging_Index = as.numeric(AGING_IDX),
+    District_Chi = if_else(Region_Chi == "新竹市", "新竹市", Raw_District)
+  ) %>%
+  group_by(Region_Chi, District_Chi) %>%
+  summarise(Aging_Index = mean(Aging_Index, na.rm = TRUE), .groups = "drop")
+
+# ------------------------------------------------------------------------------ 
+# 4. Integration & Translation
+# ------------------------------------------------------------------------------ 
+# Merge first
+final_data_chi <- inner_join(medical_summary, lvr_summary, by = c("Region_Chi", "District_Chi")) %>%
+  inner_join(aging_summary, by = c("Region_Chi", "District_Chi"))
+
+# Apply Translation
+final_data <- final_data_chi %>%
+  rowwise() %>%
+  mutate(
+    Region = translate_region(Region_Chi),
+    District = translate_district(District_Chi)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # Recalculate Score (Column names might have changed to English in med step if desired, but here we use values)
+    # Using the columns from med_summary which are now "Medical Center", "Regional Hospital"...
+    Medical_Score = (`Medical Center` * 10) + (`Regional Hospital` * 5) + (`Local Hospital` * 3) + (Clinic * 1) + (Pharmacy * 0.5)
+  )
+
+# ------------------------------------------------------------------------------ 
+# 5. Visualization
+# ------------------------------------------------------------------------------ 
+my_theme <- theme_minimal(base_family = "Arial") + # Use Arial for English safety
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "grey30"),
+    axis.title = element_text(face = "bold")
+  )
+
+plot_region <- function(data, region_filter, title_text, filename) {
+  
+  if(!is.null(region_filter)) {
+    plot_data <- data %>% filter(Region == region_filter)
+  } else {
+    plot_data <- data
+  }
+  
+  p <- ggplot(plot_data, aes(x = Medical_Score, y = Avg_Unit_Price)) +
+    geom_point(aes(color = Region, size = Aging_Index), alpha = 0.6) +
+    geom_text_repel(aes(label = District), size = 3.5, max.overlaps = 20) +
+    scale_y_log10(labels = scales::comma) +
+    scale_size_continuous(range = c(2, 12), name = "Aging Index") +
+    labs(
+      title = title_text,
+      subtitle = "Bubble Size represents Aging Index (Larger = Older Population)",
+      x = "Medical Resource Score",
+      y = "Avg. Unit Price (TWD/m², Log Scale)",
+      color = "Region"
+    ) +
+    my_theme
+  
+  # Add regression line only if enough points
+  if(nrow(plot_data) > 2) {
+    p <- p + geom_smooth(method = "lm", color = "red", fill = "pink", alpha = 0.2)
+  }
+  
+  print(p)
+  ggsave(here(filename), p, width = 10, height = 7, bg = "white")
+}
+
+cat("\n[Generating Plots]...\n")
+
+# 1. Combined
+plot_region(final_data, NULL, "Housing Price vs. Medical Resources (Combined)", "Plot1_Combined_Eng.png")
+
+# 2. Taipei City
+plot_region(final_data, "Taipei City", "Housing Price vs. Medical: Taipei City", "Plot2_Taipei_Eng.png")
+
+# 3. New Taipei City (Requested Addition)
+plot_region(final_data, "New Taipei City", "Housing Price vs. Medical: New Taipei City", "Plot3_NewTaipei_Eng.png")
+
+# 4. Hsinchu County
+plot_region(final_data, "Hsinchu County", "Housing Price vs. Medical: Hsinchu County", "Plot4_HsinchuCounty_Eng.png")
+
+
+# ------------------------------------------------------------------------------ 
+# 6. Notes & Label Index
+# ------------------------------------------------------------------------------ 
+
+# A. Hsinchu City Note
+note_chi <- "註記：由於公開的實價登錄資料中，新竹市並未詳細區分行政區（東區、北區、香山區），因此將其整合為單一數據點呈現，無法進行個別行政區的迴歸分析。"
+note_eng <- "NOTE: Based on public real estate transaction data, Hsinchu City does not have detailed district zoning (East, North, Xiangshan). Therefore, it is aggregated as a single data point, and individual regression analysis cannot be performed."
+
+cat("\n========================================================\n")
+cat("               IMPORTANT NOTE (Hsinchu City)            \n")
+cat("========================================================\n")
+cat(note_chi, "\n\n")
+cat(note_eng, "\n")
+cat("========================================================\n")
+
+# B. Label Index (Translation Table)
+cat("\n\n[Index: Chinese to English Labels]\n")
+label_index <- final_data %>%
+  select(Region_Chi, Region, District_Chi, District) %>%
+  arrange(Region, District) %>%
+  distinct()
+
+print(as.data.frame(label_index), row.names = FALSE)
+
+# Save index to CSV for report appendix
+write_csv(label_index, here("District_Label_Index.csv"))
+cat("\nLabel Index saved to 'District_Label_Index.csv'.\n")
+
+
+
+
+
+
+
+#1143
+# ==============================================================================
+# 6. Statistical Verification (回歸模型統計數據佐證) - 雙重輸出版
+# ==============================================================================
+
+# 定義一個函數：同時 "印出詳細解說" 並 "回傳表格資料列"
+get_regression_stats <- function(data, region_name) {
+  cat(paste0("\n>>> Analyzing: ", region_name, " <<<\n"))
+  
+  # 1. 檢查資料筆數是否足夠
+  if(nrow(data) < 3) {
+    cat("  [Skip] Not enough data points for regression (N < 3).\n")
+    if(nrow(data) > 0) {
+      cat("  Data Values:\n")
+      print(data %>% select(District, Medical_Score, Avg_Unit_Price))
+    }
+    # 回傳空資料列以保持表格格式
+    return(data.frame(
+      Region = region_name,
+      Equation = "Insufficient Data",
+      Slope_Beta1 = NA,
+      Change_Per_10_Score_Pct = NA,
+      P_Value = NA,
+      R_Squared = NA,
+      Significance = "N/A"
+    ))
+  }
+  
+  # 2. 建立線性模型
+  # Model: log10(Price) = Beta0 + Beta1 * Medical_Score
+  model <- lm(log10(Avg_Unit_Price) ~ Medical_Score, data = data)
+  
+  # 3. 提取摘要
+  sum_model <- summary(model)
+  beta0 <- coef(sum_model)[1, "Estimate"]
+  beta1 <- coef(sum_model)["Medical_Score", "Estimate"]
+  p_val <- coef(sum_model)["Medical_Score", "Pr(>|t|)"]
+  r_sq  <- sum_model$r.squared
+  
+  # 計算變動百分比
+  pct_change <- (10^(beta1 * 10) - 1) * 100
+  
+  # ---------------------------------------------------------
+  # Part A: 保留您原本的詳細文字解說 (Console Output)
+  # ---------------------------------------------------------
+  cat(sprintf("  Regression Equation: log10(Price) = %.4f + %.5f * Medical_Score\n", beta0, beta1))
+  cat(sprintf("  Slope (Beta1):       %.5f (每增加1分醫療分數，房價變化的 log10 值)\n", beta1))
+  cat(sprintf("  Slope Interpretation: 醫療分數每增加 10 分，房價約變動 %.2f%%\n", pct_change))
+  cat(sprintf("  P-value:             %.5f %s\n", p_val, ifelse(p_val < 0.05, "(Significant!)", "(Not Significant)")))
+  cat(sprintf("  R-squared:           %.4f (解釋力: %.1f%%)\n", r_sq, r_sq * 100))
+  
+  # ---------------------------------------------------------
+  # Part B: 回傳整理好的表格資料列 (For Data Frame)
+  # ---------------------------------------------------------
+  return(data.frame(
+    Region = region_name,
+    Equation = sprintf("log(P) = %.2f + %.5f * M", beta0, beta1),
+    Slope_Beta1 = beta1,
+    Change_Per_10_Score_Pct = round(pct_change, 2), # 百分比變化
+    P_Value = p_val,
+    R_Squared = r_sq,
+    Significance = case_when(
+      p_val < 0.001 ~ "***",
+      p_val < 0.01  ~ "**",
+      p_val < 0.05  ~ "*",
+      TRUE          ~ "ns"
+    )
+  ))
+}
+
+# ---------------------------------------------------------
+# 執行分析
+# ---------------------------------------------------------
+
+# 執行函數時，它會直接在螢幕上印出詳細解說
+stats_taipei      <- get_regression_stats(final_data %>% filter(Region == "Taipei City"), "Taipei City")
+stats_new_taipei  <- get_regression_stats(final_data %>% filter(Region == "New Taipei City"), "New Taipei City")
+stats_hsinchu_co  <- get_regression_stats(final_data %>% filter(Region == "Hsinchu County"), "Hsinchu County")
+stats_hsinchu_ci  <- get_regression_stats(final_data %>% filter(Region == "Hsinchu City"), "Hsinchu City")
+stats_combined    <- get_regression_stats(final_data, "Combined (All Regions)")
+
+# ---------------------------------------------------------
+# 產出最終總表 (Table Output)
+# ---------------------------------------------------------
+stats_table_final <- bind_rows(
+  stats_taipei, 
+  stats_new_taipei, 
+  stats_hsinchu_co, 
+  stats_hsinchu_ci, 
+  stats_combined
+)
+
+cat("\n========================================================\n")
+cat("               FINAL STATISTICAL SUMMARY TABLE          \n")
+cat("========================================================\n")
+
+# 印出漂亮的總表
+print(stats_table_final)
+
+# 儲存 CSV
+write_csv(stats_table_final, here("Regression_Stats_Summary.csv"))
+cat("\nSummary table saved to 'Regression_Stats_Summary.csv'.\n")
+```
