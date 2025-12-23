@@ -1,0 +1,904 @@
+---
+title: "01_intro"
+format: html
+editor: visual
+---
+
+## 
+
+```{R}
+# ==============================================================================
+# Project: Dependency Ratio Mapping (National & County with Labels)
+# Author: PBAG2
+# Date: 2025-12-03
+# Description: 
+#   1. Generates a National Choropleth Map.
+#   2. Generates Individual County Maps with Township Labels.
+# ==============================================================================
+
+rm(list = ls()) # Clear environment
+
+# 1. Setup & Libraries
+# ------------------------------------------------------------------------------
+packages <- c("readr", "dplyr", "stringr", "ggplot2", "sf", "viridis", "here", "ggrepel")
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# 設定繪圖主題
+my_theme_map <- theme_void(base_family = "Microsoft JhengHei") +
+  theme(
+    plot.title = element_text(face = "bold", size = 20, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, color = "grey40", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# 建立輸出資料夾
+dir.create(here("output", "maps_labeled"), recursive = TRUE, showWarnings = FALSE)
+cat("Project Root:", here(), "\n")
+
+# ------------------------------------------------------------------------------
+# 2. Load Data
+# ------------------------------------------------------------------------------
+cat("\n[1/4] Loading Data...\n")
+
+# 2.1 Load Aging Data
+df_aging_raw <- read_csv(here("data", "population_index", "aging_index_202412.csv"), skip = 1, show_col_types = FALSE)
+colnames(df_aging_raw) <- c("CID", "COUNTY", "TID", "TOWN", "M_F", "PH", "PDEN", 
+                            "DEP_RAT", "YOUNG_RAT", "OLD_RAT", "AGING_IDX", "TIME")
+
+aging_data <- df_aging_raw %>%
+  rename(Region = COUNTY, District = TOWN) %>%
+  mutate(
+    Dependency_Ratio = as.numeric(DEP_RAT),
+    Region = str_trim(Region),
+    District = str_trim(District)
+  ) %>%
+  # 統一將 "台" 換成 "臺"
+  mutate(Region = str_replace_all(Region, "台", "臺")) %>%
+  select(Region, District, Dependency_Ratio)
+
+# 2.2 Load Shapefile
+shp_path <- here("data", "map", "TOWN_MOI_1140318.shp")
+if (!file.exists(shp_path)) stop("錯誤：找不到地圖檔 (TOWN_MOI_1140318.shp)！")
+
+tw_town_sf <- st_read(shp_path, quiet = TRUE) %>%
+  rename(Region = COUNTYNAME, District = TOWNNAME) %>%
+  mutate(Region = str_replace_all(Region, "台", "臺"))
+
+# 2.3 Merge Data
+map_data_all <- tw_town_sf %>%
+  left_join(aging_data, by = c("Region", "District"))
+
+cat("Data Merged. Total Districts:", nrow(map_data_all), "\n")
+
+# ------------------------------------------------------------------------------
+# 3. Generate National Map (全台地圖 - 修正範圍版)
+# ------------------------------------------------------------------------------
+cat("\n[2/4] Generating National Map (Zoomed to Taiwan Area)...\n")
+
+p_national <- ggplot(map_data_all) +
+  geom_sf(aes(fill = Dependency_Ratio), color = NA, size = 0.01) +
+  scale_fill_viridis_c(
+    option = "magma", 
+    direction = -1, 
+    name = "扶養比 (%)",
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "全台各鄉鎮市區扶養比分佈",
+    subtitle = "排除外島，聚焦台灣本島",
+    caption = "資料來源：內政部統計處"
+  ) +
+  my_theme_map +
+  
+  # 關鍵修正：固定經緯度範圍
+  # 這個範圍可以包含：台灣本島、澎湖、綠島、蘭嶼、小琉球
+  coord_sf(
+    xlim = c(118.0, 122.4),  # 經度：從澎湖(左) 到 台灣東岸(右)
+    ylim = c(21.8, 26.4)     # 緯度：從恆春(下) 到 基隆(上)
+  )
+
+# 存檔
+ggsave(here("output", "maps_labeled", "Map_National_Total_Fixed.png"), 
+       p_national, width = 12, height = 16, bg = "white")
+
+cat("完成！全台地圖已修正範圍並輸出。\n")
+
+# ------------------------------------------------------------------------------
+# 4. Generate County Maps with Labels (縣市地圖 + 標籤 + 特殊修正)
+# ------------------------------------------------------------------------------
+cat("\n[3/4] Generating Labeled County Maps (Fixed for Kaohsiung & Yilan)...\n")
+
+county_list <- unique(map_data_all$Region)
+county_list <- county_list[!is.na(county_list)]
+
+for (county in county_list) {
+  
+  cat("  Processing:", county, "...\n")
+  
+  # 4.1 篩選該縣市資料
+  county_map_data <- map_data_all %>% filter(Region == county)
+  
+  # 4.2 計算中心點 (用於標籤定位)
+  county_centroids <- suppressWarnings(st_centroid(county_map_data))
+  coords <- st_coordinates(county_centroids)
+  county_map_data <- cbind(county_map_data, coords)
+  
+  # 4.3 繪圖 (標籤設定)
+  p <- ggplot(county_map_data) +
+    geom_sf(aes(fill = Dependency_Ratio), color = "white", size = 0.2) +
+    
+    # 標籤設定 (避免重疊並調整排斥力)
+    geom_text_repel(
+      aes(x = X, y = Y, label = District),
+      size = 3,
+      family = "Microsoft JhengHei",
+      color = "black",
+      bg.color = "white",
+      bg.r = 0.15,
+      min.segment.length = 0,
+      # 針對 高雄市 與 宜蘭縣 增加排斥力，避免標籤擠在一起
+      force = ifelse(county %in% c("高雄市", "宜蘭縣"), 1, 10) 
+    ) +
+    
+    scale_fill_viridis_c(
+      option = "magma", 
+      direction = -1, 
+      name = "扶養比 (%)",
+      na.value = "grey90"
+    ) +
+    
+    labs(
+      title = paste(county, "- 扶養比分佈"),
+      subtitle = "顯示各鄉鎮市區名稱"
+    ) +
+    my_theme_map
+  
+  # ----------------------------------------------------------------
+  # 針對特定縣市設定 Zoom In (特殊範圍修正)
+  # ----------------------------------------------------------------
+  
+  # Case 1: 高雄市 (排除東沙、南沙，聚焦本島)
+  if (county == "高雄市") {
+    p <- p + coord_sf(
+      xlim = c(120.15, 121.10),
+      ylim = c(22.40, 23.50)
+    )
+  }
+  
+  # Case 2: 宜蘭縣 (排除釣魚台，聚焦蘭陽平原)
+  else if (county == "宜蘭縣") {
+    p <- p + coord_sf(
+      xlim = c(121.30, 122.05), # 聚焦：蘭陽平原與龜山島
+      ylim = c(24.28, 25.02)    # 聚焦：南澳至頭城
+    )
+  }
+  
+  # ----------------------------------------------------------------
+  
+  # 4.4 存檔
+  filename <- paste0("Map_Labeled_", county, ".png")
+  filepath <- here("output", "maps_labeled", filename)
+  
+  ggsave(filepath, p, width = 10, height = 10, bg = "white")
+}
+
+cat("\n[4/4] All Done! Kaohsiung and Yilan maps are now fixed.\n")
+```
+
+```{R}
+#12230136
+# ==============================================================================
+# Project: Dependency Ratio Mapping (English Labels with Values)
+# Author: PBAG2
+# Date: 2025-12-03
+# Description: 
+#   1. Generates a National Choropleth Map (English).
+#   2. Generates County Maps with English Labels & Percentage Values.
+# ==============================================================================
+
+rm(list = ls()) # Clear environment
+
+# 1. Setup & Libraries
+# ------------------------------------------------------------------------------
+packages <- c("readr", "dplyr", "stringr", "ggplot2", "sf", "viridis", "here", "ggrepel")
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Define Theme (English Font preferred, e.g., Arial or Helvetica)
+my_theme_map <- theme_void(base_family = "Arial") +
+  theme(
+    plot.title = element_text(face = "bold", size = 22, hjust = 0.5),
+    plot.subtitle = element_text(size = 16, color = "grey40", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.caption = element_text(size = 10, color = "grey60", hjust = 1)
+  )
+
+# Create Output Directory
+dir.create(here("output", "maps_eng_labeled"), recursive = TRUE, showWarnings = FALSE)
+cat("Project Root:", here(), "\n")
+
+# ------------------------------------------------------------------------------
+# 2. Load Data
+# ------------------------------------------------------------------------------
+cat("\n[1/4] Loading Data...\n")
+
+# 2.1 Load Aging Data
+df_aging_raw <- read_csv(here("data", "population_index", "aging_index_202412.csv"), skip = 1, show_col_types = FALSE)
+colnames(df_aging_raw) <- c("CID", "COUNTY", "TID", "TOWN", "M_F", "PH", "PDEN", 
+                            "DEP_RAT", "YOUNG_RAT", "OLD_RAT", "AGING_IDX", "TIME")
+
+aging_data <- df_aging_raw %>%
+  rename(Region_Chi = COUNTY, District_Chi = TOWN) %>%
+  mutate(
+    Dependency_Ratio = as.numeric(DEP_RAT),
+    Region_Chi = str_trim(Region_Chi),
+    District_Chi = str_trim(District_Chi)
+  ) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  select(Region_Chi, District_Chi, Dependency_Ratio)
+
+# 2.2 Load Shapefile (With English Names)
+shp_path <- here("data", "map", "TOWN_MOI_1140318.shp")
+if (!file.exists(shp_path)) stop("Error: Shapefile not found (TOWN_MOI_1140318.shp)!")
+
+# Read Shapefile and try to get English names
+# Standard MOI shapefiles usually have COUNTYENG and TOWNENG
+tw_town_sf <- st_read(shp_path, quiet = TRUE)
+
+# Check if English columns exist, otherwise define mapping manually or warn
+if (!("TOWNENG" %in% names(tw_town_sf))) {
+  warning("Warning: 'TOWNENG' column not found in shapefile! Labels might remain Chinese.")
+  tw_town_sf <- tw_town_sf %>%
+    rename(Region_Chi = COUNTYNAME, District_Chi = TOWNNAME) %>%
+    mutate(Region_Eng = Region_Chi, District_Eng = District_Chi) # Fallback
+} else {
+  tw_town_sf <- tw_town_sf %>%
+    rename(
+      Region_Chi = COUNTYNAME, 
+      District_Chi = TOWNNAME,
+      Region_Eng = COUNTYENG,
+      District_Eng = TOWNENG
+    )
+}
+
+# Fix "Tai" char in Chinese columns for merging
+tw_town_sf <- tw_town_sf %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺"))
+
+# 2.3 Merge Data
+# Merge based on CHINESE names (Region_Chi, District_Chi) to ensure accuracy
+map_data_all <- tw_town_sf %>%
+  left_join(aging_data, by = c("Region_Chi", "District_Chi")) %>%
+  # Create the final Label Text: "Name \n Value%"
+  mutate(
+    Label_Text = paste0(District_Eng, "\n", round(Dependency_Ratio, 1), "%")
+  )
+
+cat("Data Merged. Total Districts:", nrow(map_data_all), "\n")
+
+# ------------------------------------------------------------------------------
+# 3. Generate National Map (English)
+# ------------------------------------------------------------------------------
+cat("\n[2/4] Generating National Map...\n")
+
+p_national <- ggplot(map_data_all) +
+  geom_sf(aes(fill = Dependency_Ratio), color = NA, size = 0.01) +
+  scale_fill_viridis_c(
+    option = "magma", 
+    direction = -1, 
+    name = "Dependency\nRatio (%)",
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "Dependency Ratio by District in Taiwan",
+    subtitle = "Higher Ratio indicates heavier burden on working population",
+    caption = "Source: Ministry of the Interior | Visualized by R"
+  ) +
+  my_theme_map +
+  # Fixed Coordinates for Taiwan Main Island
+  coord_sf(
+    xlim = c(118.0, 122.4), 
+    ylim = c(21.8, 26.4)
+  )
+
+ggsave(here("output", "maps_eng_labeled", "Map_National_Eng.png"), 
+       p_national, width = 12, height = 16, bg = "white")
+
+# ------------------------------------------------------------------------------
+# 4. Generate County Maps (English Labels + Values)
+# ------------------------------------------------------------------------------
+cat("\n[3/4] Generating County Maps with English Labels & Values...\n")
+
+# Use Chinese names for filtering loop, but use English names for filenames/titles
+county_list <- unique(map_data_all$Region_Chi)
+county_list <- county_list[!is.na(county_list)]
+
+for (county_chi in county_list) {
+  
+  # Get English Name for this county (take the first one found)
+  county_eng <- map_data_all$Region_Eng[map_data_all$Region_Chi == county_chi][1]
+  
+  # Clean up filename (remove spaces or special chars if any)
+  filename_part <- str_replace_all(county_eng, " ", "")
+  
+  cat("  Processing:", county_eng, "(", county_chi, ")...\n")
+  
+  # 4.1 Filter Data
+  county_map_data <- map_data_all %>% filter(Region_Chi == county_chi)
+  
+  # 4.2 Calculate Centroids for Labels
+  county_centroids <- suppressWarnings(st_centroid(county_map_data))
+  coords <- st_coordinates(county_centroids)
+  county_map_data <- cbind(county_map_data, coords)
+  
+  # 4.3 Plotting
+  p <- ggplot(county_map_data) +
+    geom_sf(aes(fill = Dependency_Ratio), color = "white", size = 0.2) +
+    
+    # *** English Labels with Percentage ***
+    geom_text_repel(
+      aes(x = X, y = Y, label = Label_Text),
+      size = 3,                 # Font size
+      family = "Arial",         # English font
+      fontface = "bold",
+      color = "black",
+      bg.color = "white",       # White outline for readability
+      bg.r = 0.15,
+      lineheight = 0.8,         # Adjust line spacing for 2-line labels
+      min.segment.length = 0,
+      box.padding = 0.3,
+      # Add repulsion force for dense areas (e.g. Kaohsiung, Taipei)
+      force = ifelse(county_eng %in% c("Kaohsiung City", "Taipei City", "New Taipei City"), 2, 5),
+      max.overlaps = 30         # Allow more labels to show
+    ) +
+    
+    scale_fill_viridis_c(
+      option = "magma", 
+      direction = -1, 
+      name = "Dep. Ratio (%)",
+      na.value = "grey90"
+    ) +
+    
+    labs(
+      title = paste(county_eng, "- Dependency Ratio"),
+      subtitle = "Label format: District Name / Percentage (%)",
+      caption = "PBAG2 Analysis"
+    ) +
+    my_theme_map
+  
+  # ----------------------------------------------------------------
+  # Specific Zoom Adjustments
+  # ----------------------------------------------------------------
+  
+  if (county_chi == "高雄市") {
+    p <- p + coord_sf(xlim = c(120.15, 121.10), ylim = c(22.40, 23.50))
+  } else if (county_chi == "宜蘭縣") {
+    p <- p + coord_sf(xlim = c(121.30, 122.05), ylim = c(24.28, 25.02))
+  }
+  
+  # ----------------------------------------------------------------
+  
+  # 4.4 Save
+  filepath <- here("output", "maps_eng_labeled", paste0("Map_", filename_part, "_Eng.png"))
+  ggsave(filepath, p, width = 10, height = 10, bg = "white")
+}
+
+cat("\n[4/4] All Done! Check 'output/maps_eng_labeled' folder.\n")
+
+```
+
+```{r}
+#0138
+# ==============================================================================
+# Project: Dependency Ratio Mapping (Robust English Version)
+# Author: PBAG2
+# Date: 2025-12-03
+# Description: 
+#   1. Handles Shapefiles missing English columns.
+#   2. Uses manual dictionary for translation.
+#   3. Generates English Maps with Values.
+# ==============================================================================
+
+rm(list = ls()) # Clear environment
+
+# 1. Setup & Libraries
+# ------------------------------------------------------------------------------
+packages <- c("readr", "dplyr", "stringr", "ggplot2", "sf", "viridis", "here", "ggrepel")
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Theme
+my_theme_map <- theme_void(base_family = "Arial") +
+  theme(
+    plot.title = element_text(face = "bold", size = 22, hjust = 0.5),
+    plot.subtitle = element_text(size = 16, color = "grey40", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.caption = element_text(size = 10, color = "grey60", hjust = 1)
+  )
+
+dir.create(here("output", "maps_eng_labeled"), recursive = TRUE, showWarnings = FALSE)
+
+# ------------------------------------------------------------------------------
+# 2. Define Translation Dictionaries (The Fix)
+# ------------------------------------------------------------------------------
+
+# 2.1 Region (County) Dictionary - 全台 22 縣市
+county_dict <- c(
+  "臺北市" = "Taipei City",      "新北市" = "New Taipei City",
+  "基隆市" = "Keelung City",     "桃園市" = "Taoyuan City",
+  "新竹市" = "Hsinchu City",     "新竹縣" = "Hsinchu County",
+  "苗栗縣" = "Miaoli County",    "臺中市" = "Taichung City",
+  "彰化縣" = "Changhua County",  "南投縣" = "Nantou County",
+  "雲林縣" = "Yunlin County",    "嘉義市" = "Chiayi City",
+  "嘉義縣" = "Chiayi County",    "臺南市" = "Tainan City",
+  "高雄市" = "Kaohsiung City",   "屏東縣" = "Pingtung County",
+  "宜蘭縣" = "Yilan County",     "花蓮縣" = "Hualien County",
+  "臺東縣" = "Taitung County",   "澎湖縣" = "Penghu County",
+  "金門縣" = "Kinmen County",    "連江縣" = "Lienchiang County"
+)
+
+# 2.2 District Dictionary (重點區域+常見區域)
+# 如果有缺漏的鄉鎮，圖表會顯示拼音或原名，不會報錯
+district_dict <- c(
+  # --- Hsinchu Area ---
+  "竹北市" = "Zhubei City",      "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",   "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",   "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township","橫山鄉" = "Hengshan Township",
+  "北埔鄉" = "Beipu Township",   "寶山鄉" = "Baoshan Township",
+  "峨眉鄉" = "Emei Township",    "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township",  "東區"   = "East Dist.", 
+  "北區"   = "North Dist.",      "香山區" = "Xiangshan Dist.",
+  
+  # --- Taipei City ---
+  "中正區" = "Zhongzheng Dist.", "大同區" = "Datong Dist.",
+  "中山區" = "Zhongshan Dist.",  "松山區" = "Songshan Dist.",
+  "大安區" = "Da'an Dist.",      "萬華區" = "Wanhua Dist.",
+  "信義區" = "Xinyi Dist.",      "士林區" = "Shilin Dist.",
+  "北投區" = "Beitou Dist.",     "內湖區" = "Neihu Dist.",
+  "南港區" = "Nangang Dist.",    "文山區" = "Wenshan Dist.",
+  
+  # --- New Taipei City ---
+  "板橋區" = "Banqiao Dist.",    "三重區" = "Sanchong Dist.",
+  "中和區" = "Zhonghe Dist.",    "永和區" = "Yonghe Dist.",
+  "新莊區" = "Xinzhuang Dist.",  "新店區" = "Xindian Dist.",
+  "土城區" = "Tucheng Dist.",    "蘆洲區" = "Luzhou Dist.",
+  "汐止區" = "Xizhi Dist.",      "樹林區" = "Shulin Dist.",
+  "淡水區" = "Tamsui Dist.",     "鶯歌區" = "Yingge Dist.",
+  "三峽區" = "Sanxia Dist.",     "五股區" = "Wugu Dist.",
+  "泰山區" = "Taishan Dist.",    "林口區" = "Linkou Dist.",
+  "深坑區" = "Shenkeng Dist.",   "石碇區" = "Shiding Dist.",
+  "坪林區" = "Pinglin Dist.",    "三芝區" = "Sanzhi Dist.",
+  "石門區" = "Shimen Dist.",     "八里區" = "Bali Dist.",
+  "平溪區" = "Pingxi Dist.",     "雙溪區" = "Shuangxi Dist.",
+  "貢寮區" = "Gongliao Dist.",   "金山區" = "Jinshan Dist.",
+  "萬里區" = "Wanli Dist.",      "烏來區" = "Wulai Dist.",
+  "瑞芳區" = "Ruifang Dist."
+)
+
+translate_region <- function(x) {
+  res <- county_dict[x]
+  ifelse(is.na(res), x, res)
+}
+
+translate_district <- function(x) {
+  res <- district_dict[x]
+  ifelse(is.na(res), x, res) # 如果字典裡沒有，就維持中文，避免空白
+}
+
+# ------------------------------------------------------------------------------
+# 3. Load Data & Shapefile
+# ------------------------------------------------------------------------------
+cat("\n[1/4] Loading Data...\n")
+
+# 3.1 Load Aging Data
+df_aging_raw <- read_csv(here("data", "population_index", "aging_index_202412.csv"), skip = 1, show_col_types = FALSE)
+colnames(df_aging_raw) <- c("CID", "COUNTY", "TID", "TOWN", "M_F", "PH", "PDEN", 
+                            "DEP_RAT", "YOUNG_RAT", "OLD_RAT", "AGING_IDX", "TIME")
+
+aging_data <- df_aging_raw %>%
+  rename(Region_Chi = COUNTY, District_Chi = TOWN) %>%
+  mutate(
+    Dependency_Ratio = as.numeric(DEP_RAT),
+    Region_Chi = str_trim(Region_Chi),
+    District_Chi = str_trim(District_Chi)
+  ) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  select(Region_Chi, District_Chi, Dependency_Ratio)
+
+# 3.2 Load Shapefile (The one causing issues)
+shp_path <- here("data", "map", "TOWN_MOI_1140318.shp")
+if (!file.exists(shp_path)) stop("Error: Shapefile not found!")
+
+tw_town_sf <- st_read(shp_path, quiet = TRUE) 
+
+# --- CRITICAL FIX: Manually create English columns using dictionaries ---
+# We assume the shapefile has 'COUNTYNAME' and 'TOWNNAME' (Standard Chinese columns)
+tw_town_sf <- tw_town_sf %>%
+  rename(Region_Chi = COUNTYNAME, District_Chi = TOWNNAME) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  rowwise() %>%
+  mutate(
+    Region_Eng = translate_region(Region_Chi),
+    District_Eng = translate_district(District_Chi)
+  ) %>%
+  ungroup()
+
+# 3.3 Merge Data
+map_data_all <- tw_town_sf %>%
+  left_join(aging_data, by = c("Region_Chi", "District_Chi")) %>%
+  mutate(
+    Label_Text = paste0(District_Eng, "\n", round(Dependency_Ratio, 1), "%")
+  )
+
+cat("Data Merged. Total Districts:", nrow(map_data_all), "\n")
+
+# ------------------------------------------------------------------------------
+# 4. Generate National Map (English)
+# ------------------------------------------------------------------------------
+cat("\n[2/4] Generating National Map...\n")
+
+p_national <- ggplot(map_data_all) +
+  geom_sf(aes(fill = Dependency_Ratio), color = NA, size = 0.01) +
+  scale_fill_viridis_c(
+    option = "magma", 
+    direction = -1, 
+    name = "Dependency\nRatio (%)",
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "Dependency Ratio by District in Taiwan",
+    subtitle = "Higher Ratio indicates heavier burden on working population",
+    caption = "Source: Ministry of the Interior | Visualized by R"
+  ) +
+  my_theme_map +
+  coord_sf(
+    xlim = c(118.0, 122.4), 
+    ylim = c(21.8, 26.4)
+  )
+
+ggsave(here("output", "maps_eng_labeled", "Map_National_Eng.png"), 
+       p_national, width = 12, height = 16, bg = "white")
+
+# ------------------------------------------------------------------------------
+# 5. Generate County Maps (English Labels + Values)
+# ------------------------------------------------------------------------------
+cat("\n[3/4] Generating County Maps with English Labels & Values...\n")
+
+# Loop through regions that we have data for
+county_list <- unique(map_data_all$Region_Chi)
+county_list <- county_list[!is.na(county_list)]
+
+for (county_chi in county_list) {
+  
+  # Retrieve English name from our translated data
+  county_eng <- map_data_all$Region_Eng[map_data_all$Region_Chi == county_chi][1]
+  
+  # Safe filename
+  filename_part <- str_replace_all(county_eng, " ", "")
+  
+  cat("  Processing:", county_eng, "...\n")
+  
+  # Filter
+  county_map_data <- map_data_all %>% filter(Region_Chi == county_chi)
+  
+  # Centroids
+  county_centroids <- suppressWarnings(st_centroid(county_map_data))
+  coords <- st_coordinates(county_centroids)
+  county_map_data <- cbind(county_map_data, coords)
+  
+  # Plot
+  p <- ggplot(county_map_data) +
+    geom_sf(aes(fill = Dependency_Ratio), color = "white", size = 0.2) +
+    
+    geom_text_repel(
+      aes(x = X, y = Y, label = Label_Text),
+      size = 3,
+      family = "Arial",
+      fontface = "bold",
+      color = "black",
+      bg.color = "white",
+      bg.r = 0.15,
+      lineheight = 0.8,
+      min.segment.length = 0,
+      force = ifelse(county_eng %in% c("Kaohsiung City", "Taipei City", "New Taipei City"), 2, 5),
+      max.overlaps = 30
+    ) +
+    
+    scale_fill_viridis_c(
+      option = "magma", 
+      direction = -1, 
+      name = "Dep. Ratio (%)",
+      na.value = "grey90"
+    ) +
+    
+    labs(
+      title = paste(county_eng, "- Dependency Ratio"),
+      subtitle = "District Name / Percentage (%)",
+      caption = "PBAG2 Analysis"
+    ) +
+    my_theme_map
+  
+  # Zoom Logic
+  if (county_chi == "高雄市") {
+    p <- p + coord_sf(xlim = c(120.15, 121.10), ylim = c(22.40, 23.50))
+  } else if (county_chi == "宜蘭縣") {
+    p <- p + coord_sf(xlim = c(121.30, 122.05), ylim = c(24.28, 25.02))
+  }
+  
+  ggsave(here("output", "maps_eng_labeled", paste0("Map_", filename_part, "_Eng.png")), 
+         p, width = 10, height = 10, bg = "white")
+}
+
+cat("\n[4/4] All Done! Check 'output/maps_eng_labeled' folder.\n")
+```
+
+```{r}
+# ==============================================================================
+# Project: Dependency Ratio Mapping (Robust English Version)
+# Author: PBAG2
+# Date: 2025-12-03
+# Description: 
+#   1. Handles Shapefiles missing English columns.
+#   2. Uses manual dictionary for translation.
+#   3. Generates English Maps with Values.
+# ==============================================================================
+
+rm(list = ls()) # Clear environment
+
+# 1. Setup & Libraries
+# ------------------------------------------------------------------------------
+packages <- c("readr", "dplyr", "stringr", "ggplot2", "sf", "viridis", "here", "ggrepel")
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Theme
+my_theme_map <- theme_void(base_family = "Arial") +
+  theme(
+    plot.title = element_text(face = "bold", size = 22, hjust = 0.5),
+    plot.subtitle = element_text(size = 16, color = "grey40", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.caption = element_text(size = 10, color = "grey60", hjust = 1)
+  )
+
+dir.create(here("output", "maps_eng_labeled"), recursive = TRUE, showWarnings = FALSE)
+
+# ------------------------------------------------------------------------------
+# 2. Define Translation Dictionaries (The Fix)
+# ------------------------------------------------------------------------------
+
+# 2.1 Region (County) Dictionary - 全台 22 縣市
+county_dict <- c(
+  "臺北市" = "Taipei City",      "新北市" = "New Taipei City",
+  "基隆市" = "Keelung City",     "桃園市" = "Taoyuan City",
+  "新竹市" = "Hsinchu City",     "新竹縣" = "Hsinchu County",
+  "苗栗縣" = "Miaoli County",    "臺中市" = "Taichung City",
+  "彰化縣" = "Changhua County",  "南投縣" = "Nantou County",
+  "雲林縣" = "Yunlin County",    "嘉義市" = "Chiayi City",
+  "嘉義縣" = "Chiayi County",    "臺南市" = "Tainan City",
+  "高雄市" = "Kaohsiung City",   "屏東縣" = "Pingtung County",
+  "宜蘭縣" = "Yilan County",     "花蓮縣" = "Hualien County",
+  "臺東縣" = "Taitung County",   "澎湖縣" = "Penghu County",
+  "金門縣" = "Kinmen County",    "連江縣" = "Lienchiang County"
+)
+
+# 2.2 District Dictionary (重點區域+常見區域)
+# 如果有缺漏的鄉鎮，圖表會顯示拼音或原名，不會報錯
+district_dict <- c(
+  # --- Hsinchu Area ---
+  "竹北市" = "Zhubei City",      "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",   "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",   "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township","橫山鄉" = "Hengshan Township",
+  "北埔鄉" = "Beipu Township",   "寶山鄉" = "Baoshan Township",
+  "峨眉鄉" = "Emei Township",    "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township",  "東區"   = "East Dist.", 
+  "北區"   = "North Dist.",      "香山區" = "Xiangshan Dist.",
+  
+  # --- Taipei City ---
+  "中正區" = "Zhongzheng Dist.", "大同區" = "Datong Dist.",
+  "中山區" = "Zhongshan Dist.",  "松山區" = "Songshan Dist.",
+  "大安區" = "Da'an Dist.",      "萬華區" = "Wanhua Dist.",
+  "信義區" = "Xinyi Dist.",      "士林區" = "Shilin Dist.",
+  "北投區" = "Beitou Dist.",     "內湖區" = "Neihu Dist.",
+  "南港區" = "Nangang Dist.",    "文山區" = "Wenshan Dist.",
+  
+  # --- New Taipei City ---
+  "板橋區" = "Banqiao Dist.",    "三重區" = "Sanchong Dist.",
+  "中和區" = "Zhonghe Dist.",    "永和區" = "Yonghe Dist.",
+  "新莊區" = "Xinzhuang Dist.",  "新店區" = "Xindian Dist.",
+  "土城區" = "Tucheng Dist.",    "蘆洲區" = "Luzhou Dist.",
+  "汐止區" = "Xizhi Dist.",      "樹林區" = "Shulin Dist.",
+  "淡水區" = "Tamsui Dist.",     "鶯歌區" = "Yingge Dist.",
+  "三峽區" = "Sanxia Dist.",     "五股區" = "Wugu Dist.",
+  "泰山區" = "Taishan Dist.",    "林口區" = "Linkou Dist.",
+  "深坑區" = "Shenkeng Dist.",   "石碇區" = "Shiding Dist.",
+  "坪林區" = "Pinglin Dist.",    "三芝區" = "Sanzhi Dist.",
+  "石門區" = "Shimen Dist.",     "八里區" = "Bali Dist.",
+  "平溪區" = "Pingxi Dist.",     "雙溪區" = "Shuangxi Dist.",
+  "貢寮區" = "Gongliao Dist.",   "金山區" = "Jinshan Dist.",
+  "萬里區" = "Wanli Dist.",      "烏來區" = "Wulai Dist.",
+  "瑞芳區" = "Ruifang Dist."
+)
+
+translate_region <- function(x) {
+  res <- county_dict[x]
+  ifelse(is.na(res), x, res)
+}
+
+translate_district <- function(x) {
+  res <- district_dict[x]
+  ifelse(is.na(res), x, res) # 如果字典裡沒有，就維持中文，避免空白
+}
+
+# ------------------------------------------------------------------------------
+# 3. Load Data & Shapefile
+# ------------------------------------------------------------------------------
+cat("\n[1/4] Loading Data...\n")
+
+# 3.1 Load Aging Data
+df_aging_raw <- read_csv(here("data", "population_index", "aging_index_202412.csv"), skip = 1, show_col_types = FALSE)
+colnames(df_aging_raw) <- c("CID", "COUNTY", "TID", "TOWN", "M_F", "PH", "PDEN", 
+                            "DEP_RAT", "YOUNG_RAT", "OLD_RAT", "AGING_IDX", "TIME")
+
+aging_data <- df_aging_raw %>%
+  rename(Region_Chi = COUNTY, District_Chi = TOWN) %>%
+  mutate(
+    Dependency_Ratio = as.numeric(DEP_RAT),
+    Region_Chi = str_trim(Region_Chi),
+    District_Chi = str_trim(District_Chi)
+  ) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  select(Region_Chi, District_Chi, Dependency_Ratio)
+
+# 3.2 Load Shapefile (The one causing issues)
+shp_path <- here("data", "map", "TOWN_MOI_1140318.shp")
+if (!file.exists(shp_path)) stop("Error: Shapefile not found!")
+
+tw_town_sf <- st_read(shp_path, quiet = TRUE) 
+
+# --- CRITICAL FIX: Manually create English columns using dictionaries ---
+# We assume the shapefile has 'COUNTYNAME' and 'TOWNNAME' (Standard Chinese columns)
+tw_town_sf <- tw_town_sf %>%
+  rename(Region_Chi = COUNTYNAME, District_Chi = TOWNNAME) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  rowwise() %>%
+  mutate(
+    Region_Eng = translate_region(Region_Chi),
+    District_Eng = translate_district(District_Chi)
+  ) %>%
+  ungroup()
+
+# 3.3 Merge Data
+map_data_all <- tw_town_sf %>%
+  left_join(aging_data, by = c("Region_Chi", "District_Chi")) %>%
+  mutate(
+    Label_Text = paste0(District_Eng, "\n", round(Dependency_Ratio, 1), "%")
+  )
+
+cat("Data Merged. Total Districts:", nrow(map_data_all), "\n")
+
+# ------------------------------------------------------------------------------
+# 4. Generate National Map (English)
+# ------------------------------------------------------------------------------
+cat("\n[2/4] Generating National Map...\n")
+
+p_national <- ggplot(map_data_all) +
+  geom_sf(aes(fill = Dependency_Ratio), color = NA, size = 0.01) +
+  scale_fill_viridis_c(
+    option = "magma", 
+    direction = -1, 
+    name = "Dependency\nRatio (%)",
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "Dependency Ratio by District in Taiwan",
+    subtitle = "Higher Ratio indicates heavier burden on working population",
+    caption = "Source: Ministry of the Interior | Visualized by R"
+  ) +
+  my_theme_map +
+  coord_sf(
+    xlim = c(118.0, 122.4), 
+    ylim = c(21.8, 26.4)
+  )
+
+ggsave(here("output", "maps_eng_labeled", "Map_National_Eng.png"), 
+       p_national, width = 12, height = 16, bg = "white")
+
+# ------------------------------------------------------------------------------
+# 5. Generate County Maps (English Labels + Values)
+# ------------------------------------------------------------------------------
+cat("\n[3/4] Generating County Maps with English Labels & Values...\n")
+
+# Loop through regions that we have data for
+county_list <- unique(map_data_all$Region_Chi)
+county_list <- county_list[!is.na(county_list)]
+
+for (county_chi in county_list) {
+  
+  # Retrieve English name from our translated data
+  county_eng <- map_data_all$Region_Eng[map_data_all$Region_Chi == county_chi][1]
+  
+  # Safe filename
+  filename_part <- str_replace_all(county_eng, " ", "")
+  
+  cat("  Processing:", county_eng, "...\n")
+  
+  # Filter
+  county_map_data <- map_data_all %>% filter(Region_Chi == county_chi)
+  
+  # Centroids
+  county_centroids <- suppressWarnings(st_centroid(county_map_data))
+  coords <- st_coordinates(county_centroids)
+  county_map_data <- cbind(county_map_data, coords)
+  
+  # Plot
+  p <- ggplot(county_map_data) +
+    geom_sf(aes(fill = Dependency_Ratio), color = "white", size = 0.2) +
+    
+    geom_text_repel(
+      aes(x = X, y = Y, label = Label_Text),
+      size = 3,
+      family = "Arial",
+      fontface = "bold",
+      color = "black",
+      bg.color = "white",
+      bg.r = 0.15,
+      lineheight = 0.8,
+      min.segment.length = 0,
+      force = ifelse(county_eng %in% c("Kaohsiung City", "Taipei City", "New Taipei City"), 2, 5),
+      max.overlaps = 30
+    ) +
+    
+    scale_fill_viridis_c(
+      option = "magma", 
+      direction = -1, 
+      name = "Dep. Ratio (%)",
+      na.value = "grey90"
+    ) +
+    
+    labs(
+      title = paste(county_eng, "- Dependency Ratio"),
+      subtitle = "District Name / Percentage (%)",
+      caption = "PBAG2 Analysis"
+    ) +
+    my_theme_map
+  
+  # Zoom Logic
+  if (county_chi == "高雄市") {
+    p <- p + coord_sf(xlim = c(120.15, 121.10), ylim = c(22.40, 23.50))
+  } else if (county_chi == "宜蘭縣") {
+    p <- p + coord_sf(xlim = c(121.30, 122.05), ylim = c(24.28, 25.02))
+  }
+  
+  ggsave(here("output", "maps_eng_labeled", paste0("Map_", filename_part, "_Eng.png")), 
+         p, width = 10, height = 10, bg = "white")
+}
+
+cat("\n[4/4] All Done! Check 'output/maps_eng_labeled' folder.\n")
+```

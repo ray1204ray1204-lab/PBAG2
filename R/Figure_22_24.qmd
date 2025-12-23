@@ -1,0 +1,433 @@
+---
+title: "sj_1217_v1"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+library(stringr)
+library(readr)
+library(here)
+library(ggplot2)
+```
+
+```{r}
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+```
+
+```{r}
+taipei_land_files <- c("a_lvr_land_a.csv")
+
+# Fail fast with a helpful message if the file name does not exist in your loaded list.
+if (!all(taipei_land_files %in% names(real_estate_data))) {
+  stop(
+    "These files were not found in real_estate_data: ",
+    paste(setdiff(taipei_land_files, names(real_estate_data)), collapse = ", "),
+    "\nAvailable files include: ",
+    paste(head(names(real_estate_data), 20), collapse = ", "),
+    if (length(names(real_estate_data)) > 20) " ..."
+  )
+}
+
+taipei <- taipei_land_files %>%
+  lapply(function(file) {
+    df <- real_estate_data[[file]]
+
+    colnames(df) <- as.character(unlist(df[1, ]))
+    df <- df[-1, , drop = FALSE]
+
+    df %>%
+      dplyr::select(dplyr::any_of(c(
+        "The villages and towns urban district",
+        "main use",
+        "the unit price (NTD / square meter)"
+      )))
+  }) %>%
+  bind_rows()
+
+taipei <- taipei %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(
+    District   = `The villages and towns urban district`,
+    LANDPRICE  = `the unit price (NTD / square meter)`
+  )
+
+taipei_ave_price <- taipei %>%
+  group_by(District) %>%
+  summarise(
+    avg_price = mean(parse_number(LANDPRICE), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Region = "臺北市"
+  ) %>%
+  select(Region, District, avg_price)
+
+taipei_ave_price
+
+```
+
+```{r}
+taipei_pop_data <- aging_data %>%
+  mutate(
+    COUNTY = str_replace_all(COUNTY, "台", "臺")
+  ) %>%
+  filter(COUNTY == "臺北市") %>%
+  select(any_of(c("COUNTY", "TOWN", "A65UP_A15A64_RAT"))) %>%
+  mutate(
+    A65UP_A15A64_RAT = suppressWarnings(as.numeric(A65UP_A15A64_RAT))
+  ) %>%
+  rename(
+    Region   = COUNTY,
+    District = TOWN
+  ) %>%
+  select(Region, District, A65UP_A15A64_RAT)
+
+taipei_pop_data
+```
+
+```{r}
+standardize_cols <- function(df) {
+  df %>% mutate(across(everything(), as.character))
+}
+```
+
+```{r}
+df_med <- bind_rows(
+  medical_data$medical_center %>% standardize_cols() %>% mutate(Level = "醫學中心"),
+  medical_data$hospital_regional %>% standardize_cols() %>% mutate(Level = "區域醫院"),
+  medical_data$hospital_local %>% standardize_cols() %>% mutate(Level = "地區醫院"),
+  medical_data$clinic %>% standardize_cols() %>% mutate(Level = "診所"),
+  medical_data$pharmacy %>% standardize_cols() %>% mutate(Level = "藥局")
+)
+```
+
+```{r}
+medical_summary <- df_med %>%
+  mutate(
+    地址 = iconv(地址, from = "UTF-8", to = "UTF-8", sub = ""),
+    地址 = str_replace_all(地址, "台", "臺"),
+    Region = str_extract(地址, "^.{2,3}?[縣市]"),
+    Address_Clean = str_remove(地址, "^.{2,3}?[縣市]"),
+    District = str_extract(Address_Clean, "^.+?[區鄉鎮市]"),
+    Weight = case_when(
+      Level == "醫學中心" ~ 10,
+      Level == "區域醫院" ~ 5,
+      Level == "地區醫院" ~ 3,
+      Level == "診所" ~ 1,
+      Level == "藥局" ~ 0.5,
+      TRUE ~ 0
+    )
+  ) %>%
+  filter(!is.na(Region), !is.na(District)) %>%
+  group_by(Region, District) %>%
+  summarise(
+    Medical_Score = sum(Weight, na.rm = TRUE),
+    Facility_Count = n(),
+    .groups = "drop"
+  )
+
+medical_taipei <- medical_summary %>%
+  filter(Region == "臺北市") %>%
+  select(Region, District, Medical_Score, Facility_Count)
+
+medical_taipei
+```
+
+```{r}
+taipei_core <- taipei_pop_data %>%
+  inner_join(taipei_ave_price, by = c("Region", "District")) %>%
+  left_join(medical_taipei, by = c("Region", "District")) %>%
+  mutate(
+    Medical_Score = replace_na(Medical_Score, 0),
+    Facility_Count = replace_na(Facility_Count, 0)
+  ) %>%
+  mutate(
+    avg_price = if_else(is.finite(avg_price) & avg_price > 0, avg_price, NA_real_),
+    Log_Price = log(avg_price),
+    Log_Medical = log(Medical_Score + 1),
+    Aging_Burden = A65UP_A15A64_RAT
+  ) %>%
+  filter(
+    is.finite(Log_Price),
+    is.finite(Log_Medical),
+    !is.na(Aging_Burden)
+  )
+
+taipei_core
+```
+
+```{r}
+library(ggrepel)
+
+ggplot(
+  taipei_core,
+  aes(x = Aging_Burden, y = Log_Medical, size = Log_Price)
+) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  ggrepel::geom_text_repel(
+    aes(label = District),      # label each dot by district
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(name = "Housing Price (log)") +
+  labs(
+    title = "Inverse Care Law in Taipei City: Aging, Housing Prices, and Medical Resources",
+    x = "Aging Burden (Elderly Dependency Ratio)",
+    y = "Medical Resource Availability (log score)"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+library(ggrepel)
+
+taipei_quadrant <- taipei_core %>%
+  mutate(
+    Price_Tier = ntile(avg_price, 3),
+    Price_Tier = factor(
+      Price_Tier,
+      levels = c(1, 2, 3),
+      labels = c("Low price", "Mid price", "High price")
+    ),
+    Town_Label = District
+  )
+
+x_cut <- median(taipei_quadrant$Aging_Burden, na.rm = TRUE)
+y_cut <- median(taipei_quadrant$Medical_Score, na.rm = TRUE)
+
+taipei_quadrant <- taipei_quadrant %>%
+  mutate(
+    Need_Level = if_else(Aging_Burden >= x_cut, "High need", "Low need"),
+    Care_Level = if_else(Medical_Score >= y_cut, "High care", "Low care"),
+    Quadrant   = paste(Need_Level, Care_Level, sep = " / ")
+  )
+
+ggplot(
+  taipei_quadrant,
+  aes(
+    x = Aging_Burden,
+    y = Medical_Score,
+    color = Price_Tier,
+    shape = Price_Tier
+  )
+) +
+  geom_vline(xintercept = x_cut, linetype = "dotted") +
+  geom_hline(yintercept = y_cut, linetype = "dotted") +
+  geom_point(alpha = 0.85, size = 3) +
+  ggrepel::geom_text_repel(
+    aes(label = Town_Label),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  labs(
+    title = "Validating the Inverse Care Law: Need vs Care with Housing Price Tier (Taipei City)",
+    subtitle = paste0(
+      "Quadrant cutoffs use medians: need = ", round(x_cut, 2),
+      ", care = ", round(y_cut, 2)
+    ),
+    x = "Need: Elderly Dependency Ratio (Aging Burden)",
+    y = "Care: Medical Resource Density (Medical Score)",
+    color = "Housing price tier",
+    shape = "Housing price tier"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# =========================
+# Taipei City scatter plots with ENGLISH district labels
+# Add this block right AFTER you create taipei_core (before the two ggplot() calls)
+# =========================
+
+# Taipei district English lookup
+district_en <- c(
+  "松山區" = "Songshan District",
+  "信義區" = "Xinyi District",
+  "大安區" = "Da'an District",
+  "中山區" = "Zhongshan District",
+  "中正區" = "Zhongzheng District",
+  "大同區" = "Datong District",
+  "萬華區" = "Wanhua District",
+  "文山區" = "Wenshan District",
+  "南港區" = "Nangang District",
+  "內湖區" = "Neihu District",
+  "士林區" = "Shilin District",
+  "北投區" = "Beitou District"
+)
+
+# Create an English label column (fallback to Chinese if unmatched)
+taipei_core_en <- taipei_core %>%
+  mutate(
+    District = str_replace_all(District, "台", "臺"),
+    District_EN = dplyr::recode(District, !!!district_en, .default = District)
+  )
+
+# =========================
+# Plot 1: Aging vs Log(Medical), size = Log(Price), English labels
+# =========================
+library(ggrepel)
+
+ggplot(
+  taipei_core_en,
+  aes(x = Aging_Burden, y = Log_Medical, size = Log_Price)
+) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  ggrepel::geom_text_repel(
+    aes(label = District_EN),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(name = "Housing Price (log)") +
+  labs(
+    title = "Inverse Care Law in Taipei City: Aging, Housing Prices, and Medical Resources",
+    x = "Aging Burden (Elderly Dependency Ratio)",
+    y = "Medical Resource Availability (log score)"
+  ) +
+  theme_minimal()
+
+# =========================
+# Plot 2: Quadrant plot, English labels
+# =========================
+taipei_quadrant_en <- taipei_core_en %>%
+  mutate(
+    Price_Tier = ntile(avg_price, 3),
+    Price_Tier = factor(
+      Price_Tier,
+      levels = c(1, 2, 3),
+      labels = c("Low price", "Mid price", "High price")
+    ),
+    Town_Label = District_EN
+  )
+
+x_cut <- median(taipei_quadrant_en$Aging_Burden, na.rm = TRUE)
+y_cut <- median(taipei_quadrant_en$Medical_Score, na.rm = TRUE)
+
+taipei_quadrant_en <- taipei_quadrant_en %>%
+  mutate(
+    Need_Level = if_else(Aging_Burden >= x_cut, "High need", "Low need"),
+    Care_Level = if_else(Medical_Score >= y_cut, "High care", "Low care"),
+    Quadrant   = paste(Need_Level, Care_Level, sep = " / ")
+  )
+
+ggplot(
+  taipei_quadrant_en,
+  aes(
+    x = Aging_Burden,
+    y = Medical_Score,
+    color = Price_Tier,
+    shape = Price_Tier
+  )
+) +
+  geom_vline(xintercept = x_cut, linetype = "dotted") +
+  geom_hline(yintercept = y_cut, linetype = "dotted") +
+  geom_point(alpha = 0.85, size = 3) +
+  ggrepel::geom_text_repel(
+    aes(label = Town_Label),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  labs(
+    title = "Validating the Inverse Care Law: Need vs Care with Housing Price Tier (Taipei City)",
+    subtitle = paste0(
+      "Quadrant cutoffs use medians: need = ", round(x_cut, 2),
+      ", care = ", round(y_cut, 2)
+    ),
+    x = "Need: Elderly Dependency Ratio (Aging Burden)",
+    y = "Care: Medical Resource Density (Medical Score)",
+    color = "Housing price tier",
+    shape = "Housing price tier"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+# =========================
+# Taipei City scatter plot (ENGLISH labels) + LM with shaded 95% CI band
+# =========================
+
+# Taipei district English lookup
+district_en <- c(
+  "松山區" = "Songshan District",
+  "信義區" = "Xinyi District",
+  "大安區" = "Da'an District",
+  "中山區" = "Zhongshan District",
+  "中正區" = "Zhongzheng District",
+  "大同區" = "Datong District",
+  "萬華區" = "Wanhua District",
+  "文山區" = "Wenshan District",
+  "南港區" = "Nangang District",
+  "內湖區" = "Neihu District",
+  "士林區" = "Shilin District",
+  "北投區" = "Beitou District"
+)
+
+# Create an English label column (fallback to Chinese if unmatched)
+taipei_core_en <- taipei_core %>%
+  mutate(
+    District = str_replace_all(District, "台", "臺"),
+    District_EN = dplyr::recode(District, !!!district_en, .default = District)
+  )
+
+library(ggrepel)
+
+med_ref_taipei <- mean(taipei_core_en$Log_Medical, na.rm = TRUE)
+
+ggplot(
+  taipei_core_en,
+  aes(x = Aging_Burden, y = Log_Medical, size = Log_Price)
+) +
+  geom_point(alpha = 0.7) +
+  # Linear regression WITH shaded confidence band
+  geom_smooth(
+    aes(size = NULL),
+    method = "lm",
+    se = TRUE,
+    level = 0.95,
+    linetype = "dashed"
+  ) +
+  geom_hline(yintercept = med_ref_taipei, linetype = "dotted") +
+  ggrepel::geom_text_repel(
+    aes(label = District_EN),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(name = "Housing Price (log)") +
+  labs(
+    title = "Inverse Care Law in Taipei City: Aging, Housing Prices, and Medical Resources",
+    subtitle = paste0(
+      "Dashed = LM trend with 95% CI band; Mean medical availability (log) = ",
+      round(med_ref_taipei, 2)
+    ),
+    x = "Aging Burden (Elderly Dependency Ratio)",
+    y = "Medical Resource Availability (log score)"
+  ) +
+  theme_minimal()
+
+```
+

@@ -1,0 +1,301 @@
+---
+title: "04_dim2_Hsinchu"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+library(stringr)
+library(readr)
+library(here)
+library(ggplot2)
+```
+
+```{r}
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+```
+
+```{r}
+hsinchu <- list("j_lvr_land_a.csv", "o_lvr_land_a.csv") %>%
+lapply(function(file) {
+
+df <- real_estate_data[[file]]
+
+colnames(df) <- as.character(unlist(df[1, ]))
+df <- df[-1, , drop = FALSE]
+
+df %>%
+  dplyr::select(dplyr::any_of(c(
+    "The villages and towns urban district",
+    "main use",
+    "the unit price (NTD / square meter)"
+  )))
+
+}) %>%
+bind_rows()
+
+hsinchu <- hsinchu %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+hsinchu_ave_price <- hsinchu %>%
+group_by(TOWNNAME) %>%
+summarise(
+avg_price = mean(parse_number(LANDPRICE), na.rm = TRUE),
+.groups = "drop"
+)
+
+price_to_copy <- hsinchu_ave_price %>%
+filter(TOWNNAME == "新竹市") %>%
+pull(avg_price) %>%
+first()
+
+if (length(price_to_copy) == 1 && !is.na(price_to_copy)) {
+hsinchu_ave_price <- hsinchu_ave_price %>%
+add_row(
+TOWNNAME = c("北區", "香山區", "東區"),
+avg_price = price_to_copy
+) %>%
+filter(TOWNNAME != "新竹市")
+}
+
+hsinchu_ave_price
+```
+
+```{r}
+hsinchu_pop_data <- aging_data %>%
+filter(COUNTY %in% c("新竹縣", "新竹市")) %>%
+select(any_of(c("COUNTY", "TOWN", "A65UP_A15A64_RAT"))) %>%
+mutate(
+A65UP_A15A64_RAT = suppressWarnings(as.numeric(A65UP_A15A64_RAT))
+) %>%
+rename(TOWNNAME = TOWN)
+
+hsinchu_pop_data
+```
+
+```{r}
+standardize_cols <- function(df) {
+df %>% mutate(across(everything(), as.character))
+}
+```
+
+```{r}
+df_med <- bind_rows(
+medical_data$medical_center %>% standardize_cols() %>% mutate(Level = "醫學中心"),
+medical_data$hospital_regional %>% standardize_cols() %>% mutate(Level = "區域醫院"),
+medical_data$hospital_local %>% standardize_cols() %>% mutate(Level = "地區醫院"),
+medical_data$clinic %>% standardize_cols() %>% mutate(Level = "診所"),
+medical_data$pharmacy %>% standardize_cols() %>% mutate(Level = "藥局")
+)
+```
+
+```{r}
+medical_summary <- df_med %>%
+mutate(
+地址 = iconv(地址, from = "UTF-8", to = "UTF-8", sub = ""),
+地址 = str_replace_all(地址, "台", "臺"),
+Region = str_extract(地址, "^.{2,3}?[縣市]"),
+Address_Clean = str_remove(地址, "^.{2,3}?[縣市]"),
+District = str_extract(Address_Clean, "^.+?[區鄉鎮市]"),
+Weight = case_when(
+Level == "醫學中心" ~ 10,
+Level == "區域醫院" ~ 5,
+Level == "地區醫院" ~ 3,
+Level == "診所" ~ 1,
+Level == "藥局" ~ 0.5,
+TRUE ~ 0
+)
+) %>%
+filter(!is.na(Region), !is.na(District)) %>%
+group_by(Region, District) %>%
+summarise(
+Medical_Score = sum(Weight, na.rm = TRUE),
+Facility_Count = n(),
+.groups = "drop"
+)
+
+medical_hsinchu <- medical_summary %>%
+filter(Region %in% c("新竹市", "新竹縣"))
+```
+
+```{r}
+land_hsinchu <- hsinchu_ave_price %>%
+mutate(
+District = TOWNNAME,
+Region = if_else(District %in% c("北區", "香山區", "東區"), "新竹市", "新竹縣")
+) %>%
+select(Region, District, avg_price)
+```
+
+```{r}
+aging_hsinchu <- hsinchu_pop_data %>%
+mutate(
+Region = COUNTY,
+District = TOWNNAME
+) %>%
+select(Region, District, A65UP_A15A64_RAT)
+```
+
+```{r}
+medical_hsinchu <- medical_hsinchu %>%
+select(Region, District, Medical_Score, Facility_Count)
+```
+
+```{r}
+hsinchu_core <- aging_hsinchu %>%
+inner_join(land_hsinchu, by = c("Region", "District")) %>%
+left_join(medical_hsinchu, by = c("Region", "District")) %>%
+mutate(
+Medical_Score = replace_na(Medical_Score, 0),
+Facility_Count = replace_na(Facility_Count, 0)
+)
+
+hsinchu_core
+```
+
+```{r}
+hsinchu_core <- hsinchu_core %>%
+mutate(
+avg_price = if_else(is.finite(avg_price) & avg_price > 0, avg_price, NA_real_),
+Log_Price = log(avg_price),
+Log_Medical = log(Medical_Score + 1),
+Aging_Burden = A65UP_A15A64_RAT
+) %>%
+filter(
+is.finite(Log_Price),
+is.finite(Log_Medical),
+!is.na(Aging_Burden)
+)
+```
+
+```{r}
+library(ggrepel)
+
+hsinchu_scatter_df <- hsinchu_core %>%
+  transmute(
+    Region = factor(Region, levels = c("新竹市", "新竹縣")),
+    District,
+    Aging_Index = Aging_Burden,      # = A65UP_A15A64_RAT
+    Avg_Price = avg_price            # NTD per m^2
+  )
+
+p_hsinchu_price_vs_aging <- ggplot(
+  hsinchu_scatter_df,
+  aes(x = Aging_Index, y = Avg_Price, color = Region)
+) +
+  geom_point(size = 3, alpha = 0.9) +
+  ggrepel::geom_text_repel(
+    aes(label = District),
+    size = 3.5,
+    max.overlaps = Inf,
+    box.padding = 0.35,
+    point.padding = 0.25,
+    segment.alpha = 0.4
+  ) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  scale_x_continuous(labels = function(x) {
+    if (max(x, na.rm = TRUE) <= 1) {
+      scales::label_percent(accuracy = 0.1)(x)
+    } else {
+      scales::label_number(accuracy = 0.01)(x)
+    }
+  }) +
+  labs(
+    title = "Hsinchu: Real Estate Price vs Aging Index (by District/Township)",
+    x = "Aging Index (A65UP_A15A64_RAT)",
+    y = "Average Land Price (NTD per m²)",
+    color = "Region"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+
+p_hsinchu_price_vs_aging
+
+
+```
+
+```{r}
+library(ggrepel)
+
+region_en <- c(
+  "新竹市" = "Hsinchu City",
+  "新竹縣" = "Hsinchu County"
+)
+
+district_en <- c(
+  # Hsinchu City districts
+  "東區" = "East District",
+  "北區" = "North District",
+  "香山區" = "Xiangshan District",
+
+  # Hsinchu County (common townships/cities)
+  "竹北市" = "Zhubei City",
+  "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",
+  "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",
+  "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township",
+  "寶山鄉" = "Baoshan Township",
+  "北埔鄉" = "Beipu Township",
+  "峨眉鄉" = "Emei Township",
+  "橫山鄉" = "Hengshan Township",
+  "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township"
+)
+
+hsinchu_scatter_df_en <- hsinchu_core %>%
+  transmute(
+    Region_zh = Region,
+    District_zh = District,
+    Aging_Index = Aging_Burden,     # = A65UP_A15A64_RAT
+    Avg_Price = avg_price,          # NTD per m^2
+    Region = dplyr::recode(Region, !!!region_en, .default = as.character(Region)),
+    District = dplyr::recode(District, !!!district_en, .default = as.character(District))
+  ) %>%
+  mutate(
+    Region = factor(Region, levels = c("Hsinchu City", "Hsinchu County"))
+  )
+
+p_hsinchu_price_vs_aging_en <- ggplot(
+  hsinchu_scatter_df_en,
+  aes(x = Aging_Index, y = Avg_Price, color = Region)
+) +
+  geom_point(size = 3, alpha = 0.9) +
+  ggrepel::geom_text_repel(
+    aes(label = District),
+    size = 3.5,
+    max.overlaps = Inf,
+    box.padding = 0.35,
+    point.padding = 0.25,
+    segment.alpha = 0.4
+  ) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  scale_x_continuous(labels = function(x) {
+    if (max(x, na.rm = TRUE) <= 1) {
+      scales::label_percent(accuracy = 0.1)(x)
+    } else {
+      scales::label_number(accuracy = 0.01)(x)
+    }
+  }) +
+  labs(
+    title = "Hsinchu: Real Estate Price vs Aging Index (by District/Township)",
+    x = "Aging Index (65+/15–64 ratio)",
+    y = "Average Land Price (NTD per m²)",
+    color = "Region"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+
+p_hsinchu_price_vs_aging_en
+
+```

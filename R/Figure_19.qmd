@@ -1,0 +1,377 @@
+---
+title: "sj_1217_v1"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(stringr)
+library(readr)
+library(here)
+library(ggplot2)
+library(biscale)
+
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+
+```
+
+```{r}
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+```
+
+```{r}
+# Average land price by township/district
+hsinchu <- list("j_lvr_land_a.csv", "o_lvr_land_a.csv") %>%
+lapply(function(file) {
+
+df <- real_estate_data[[file]]
+
+# Promote first row to header
+colnames(df) <- as.character(unlist(df[1, ]))
+df <- df[-1, , drop = FALSE]
+
+# Select by name (more stable than column index)
+df %>%
+  dplyr::select(dplyr::any_of(c(
+    "The villages and towns urban district",
+    "main use",
+    "the unit price (NTD / square meter)"
+  )))
+
+}) %>%
+bind_rows()
+
+hsinchu <- hsinchu %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+hsinchu_ave_price <- hsinchu %>%
+group_by(TOWNNAME) %>%
+summarise(
+avg_price = mean(parse_number(LANDPRICE), na.rm = TRUE),
+.groups = "drop"
+)
+
+price_to_copy <- hsinchu_ave_price %>%
+filter(TOWNNAME == "新竹市") %>%
+pull(avg_price) %>%
+first()
+
+if (length(price_to_copy) == 1 && !is.na(price_to_copy)) {
+hsinchu_ave_price <- hsinchu_ave_price %>%
+add_row(
+TOWNNAME = c("北區", "香山區", "東區"),
+avg_price = price_to_copy
+) %>%
+filter(TOWNNAME != "新竹市")
+}
+
+hsinchu_ave_price
+```
+
+```{r}
+hsinchu_pop_data <- aging_data %>%
+filter(COUNTY %in% c("新竹縣", "新竹市")) %>%
+select(any_of(c("COUNTY", "TOWN", "A65UP_A15A64_RAT"))) %>%
+mutate(
+A65UP_A15A64_RAT = suppressWarnings(as.numeric(A65UP_A15A64_RAT))
+) %>%
+rename(TOWNNAME = TOWN)
+
+hsinchu_pop_data
+```
+
+```{r}
+standardize_cols <- function(df) {
+df %>% mutate(across(everything(), as.character))
+}
+```
+
+```{r}
+df_med <- bind_rows(
+medical_data$medical_center %>% standardize_cols() %>% mutate(Level = "醫學中心"),
+medical_data$hospital_regional %>% standardize_cols() %>% mutate(Level = "區域醫院"),
+medical_data$hospital_local %>% standardize_cols() %>% mutate(Level = "地區醫院"),
+medical_data$clinic %>% standardize_cols() %>% mutate(Level = "診所"),
+medical_data$pharmacy %>% standardize_cols() %>% mutate(Level = "藥局")
+)
+```
+
+```{r}
+medical_summary <- df_med %>%
+mutate(
+地址 = iconv(地址, from = "UTF-8", to = "UTF-8", sub = ""),
+地址 = str_replace_all(地址, "台", "臺"),
+Region = str_extract(地址, "^.{2,3}?[縣市]"),
+Address_Clean = str_remove(地址, "^.{2,3}?[縣市]"),
+District = str_extract(Address_Clean, "^.+?[區鄉鎮市]"),
+Weight = case_when(
+Level == "醫學中心" ~ 10,
+Level == "區域醫院" ~ 5,
+Level == "地區醫院" ~ 3,
+Level == "診所" ~ 1,
+Level == "藥局" ~ 0.5,
+TRUE ~ 0
+)
+) %>%
+filter(!is.na(Region), !is.na(District)) %>%
+group_by(Region, District) %>%
+summarise(
+Medical_Score = sum(Weight, na.rm = TRUE),
+Facility_Count = n(),
+.groups = "drop"
+)
+
+medical_hsinchu <- medical_summary %>%
+filter(Region %in% c("新竹市", "新竹縣"))
+```
+
+```{r}
+land_hsinchu <- hsinchu_ave_price %>%
+mutate(
+District = TOWNNAME,
+Region = if_else(District %in% c("北區", "香山區", "東區"), "新竹市", "新竹縣")
+) %>%
+select(Region, District, avg_price)
+```
+
+```{r}
+aging_hsinchu <- hsinchu_pop_data %>%
+mutate(
+Region = COUNTY,
+District = TOWNNAME
+) %>%
+select(Region, District, A65UP_A15A64_RAT)
+```
+
+```{r}
+medical_hsinchu <- medical_hsinchu %>%
+select(Region, District, Medical_Score, Facility_Count)
+```
+
+```{r}
+hsinchu_core <- aging_hsinchu %>%
+inner_join(land_hsinchu, by = c("Region", "District")) %>%
+left_join(medical_hsinchu, by = c("Region", "District")) %>%
+mutate(
+Medical_Score = replace_na(Medical_Score, 0),
+Facility_Count = replace_na(Facility_Count, 0)
+)
+
+hsinchu_core
+```
+
+```{r}
+hsinchu_core <- hsinchu_core %>%
+mutate(
+avg_price = if_else(is.finite(avg_price) & avg_price > 0, avg_price, NA_real_),
+Log_Price = log(avg_price),
+Log_Medical = log(Medical_Score + 1),
+Aging_Burden = A65UP_A15A64_RAT
+) %>%
+filter(
+is.finite(Log_Price),
+is.finite(Log_Medical),
+!is.na(Aging_Burden)
+)
+hsinchu_core
+```
+
+```{r}
+# Find sf objects currently in the environment (helps you identify your township boundaries object)
+sf_objs <- Filter(function(x) inherits(x, "sf"), mget(ls(), envir = .GlobalEnv))
+names(sf_objs)
+
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(sf)
+library(ggplot2)
+library(biscale)
+
+# 1) Choose the township boundary layer
+town_sf <- map_data[["TOWN_MOI_1140318.shp"]] %>%
+  st_make_valid() %>%
+  mutate(
+    TOWNNAME_key  = str_squish(TOWNNAME),
+    COUNTYNAME_key = str_squish(COUNTYNAME)
+  )
+
+# 2) Filter map to your study area (Hsinchu City + Hsinchu County)
+town_sf_hsinchu <- town_sf %>%
+  filter(COUNTYNAME_key %in% c("新竹市", "新竹縣"))
+
+# 3) Prepare your core table join key
+core_keyed <- hsinchu_core %>%
+  mutate(
+    TOWNNAME_key = str_squish(District),
+    Aging_Burden  = as.numeric(Aging_Burden),
+    Medical_Score = as.numeric(Medical_Score),
+    avg_price     = as.numeric(avg_price)
+  )
+
+# 4) Join attributes onto polygons
+joined_sf <- town_sf_hsinchu %>%
+  left_join(
+    core_keyed %>% select(TOWNNAME_key, Aging_Burden, Medical_Score, avg_price),
+    by = "TOWNNAME_key"
+  )
+
+# 5) Sanity check: are all your districts matched?
+anti_join(
+  core_keyed %>% distinct(TOWNNAME_key),
+  town_sf_hsinchu %>% st_drop_geometry() %>% distinct(TOWNNAME_key),
+  by = "TOWNNAME_key"
+)
+
+# 6) Bivariate map: Need vs Care (Aging_Burden vs Medical_Score)
+map_need_care <- joined_sf %>%
+  filter(!is.na(Aging_Burden), !is.na(Medical_Score)) %>%
+  bi_class(x = Aging_Burden, y = Medical_Score, style = "quantile", dim = 3)
+
+
+```
+
+```{r}
+library(biscale)
+
+get_bi_palette <- function(pal = "DkBlue", dim = 3) {
+  p <- bi_pal(pal = pal, dim = dim, preview = FALSE)
+
+  # Some versions return a function; some return a vector
+  if (is.function(p)) p <- p(dim * dim)
+
+  # If unnamed, assign the standard biscale class order (x varies fastest)
+  if (is.null(names(p))) {
+    names(p) <- c(
+      "1-1","2-1","3-1",
+      "1-2","2-2","3-2",
+      "1-3","2-3","3-3"
+    )
+  }
+
+  p
+}
+
+pal_vec <- get_bi_palette("DkBlue", 3)
+
+```
+
+```{r}
+labels_need_care <- c(
+  "1-1" = "Low need / Low care",
+  "1-2" = "Low need / Mid care",
+  "1-3" = "Low need / High care",
+  "2-1" = "Mid need / Low care",
+  "2-2" = "Mid need / Mid care",
+  "2-3" = "Mid need / High care",
+  "3-1" = "High need / Low care (Inverse care)",
+  "3-2" = "High need / Mid care",
+  "3-3" = "High need / High care"
+)
+```
+
+```{r}
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+map_need_care_lab <- map_need_care %>%
+  mutate(label_pt = st_point_on_surface(geometry)) %>%
+  st_set_geometry("label_pt")
+
+ggplot(map_need_care) +
+  geom_sf(aes(fill = bi_class), color = NA) +
+  geom_sf_text(
+    data = map_need_care_lab,
+    aes(label = TOWNNAME),
+    size = 3
+  ) +
+  scale_fill_manual(
+    values = pal_vec,
+    breaks = names(labels_need_care),
+    labels = labels_need_care,
+    drop = FALSE
+  ) +
+  labs(
+    title = "Bivariate Map: Need vs Care (Hsinchu Region)",
+    subtitle = "Need = Aging_Burden; Care = Medical_Score (3x3 quantiles)",
+    fill = "Need–Care"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r}
+# =========================
+# English translation for the bivariate map labels (town/district names)
+# Replace your last plotting chunk with this version
+# =========================
+
+# --- English lookup table for Hsinchu City/County towns/districts ---
+town_en <- c(
+  # Hsinchu City
+  "東區"   = "East District",
+  "北區"   = "North District",
+  "香山區" = "Xiangshan District",
+
+  # Hsinchu County
+  "竹北市" = "Zhubei City",
+  "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",
+  "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",
+  "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township",
+  "寶山鄉" = "Baoshan Township",
+  "北埔鄉" = "Beipu Township",
+  "峨眉鄉" = "Emei Township",
+  "橫山鄉" = "Hengshan Township",
+  "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township"
+)
+
+# Add English label column (fallback to Chinese if not in lookup)
+map_need_care_en <- map_need_care %>%
+  mutate(
+    TOWNNAME_key = str_squish(TOWNNAME),
+    TOWNNAME_EN  = dplyr::recode(TOWNNAME_key, !!!town_en, .default = TOWNNAME_key)
+  )
+
+map_need_care_lab_en <- map_need_care_en %>%
+  mutate(label_pt = st_point_on_surface(geometry)) %>%
+  st_set_geometry("label_pt")
+
+ggplot(map_need_care_en) +
+  geom_sf(aes(fill = bi_class), color = NA) +
+  geom_sf_text(
+    data = map_need_care_lab_en,
+    aes(label = TOWNNAME_EN),
+    size = 3
+  ) +
+  scale_fill_manual(
+    values = pal_vec,
+    breaks = names(labels_need_care),
+    labels = labels_need_care,
+    drop = FALSE
+  ) +
+  labs(
+    title = "Bivariate Map: Need vs Care (Hsinchu Region)",
+    subtitle = "Need = Aging_Burden; Care = Medical_Score (3x3 quantiles)",
+    fill = "Need–Care"
+  ) +
+  theme_minimal()
+
+```

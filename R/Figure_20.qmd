@@ -1,0 +1,384 @@
+---
+title: "sj_1217_v1"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+library(stringr)
+library(readr)
+library(here)
+library(ggplot2)
+```
+
+```{r}
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+```
+
+```{r}
+taipei_land_files <- c("a_lvr_land_a.csv")
+
+# Fail fast with a helpful message if the file name does not exist in your loaded list.
+if (!all(taipei_land_files %in% names(real_estate_data))) {
+  stop(
+    "These files were not found in real_estate_data: ",
+    paste(setdiff(taipei_land_files, names(real_estate_data)), collapse = ", "),
+    "\nAvailable files include: ",
+    paste(head(names(real_estate_data), 20), collapse = ", "),
+    if (length(names(real_estate_data)) > 20) " ..."
+  )
+}
+
+taipei <- taipei_land_files %>%
+  lapply(function(file) {
+    df <- real_estate_data[[file]]
+
+    colnames(df) <- as.character(unlist(df[1, ]))
+    df <- df[-1, , drop = FALSE]
+
+    df %>%
+      dplyr::select(dplyr::any_of(c(
+        "The villages and towns urban district",
+        "main use",
+        "the unit price (NTD / square meter)"
+      )))
+  }) %>%
+  bind_rows()
+
+taipei <- taipei %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(
+    District   = `The villages and towns urban district`,
+    LANDPRICE  = `the unit price (NTD / square meter)`
+  )
+
+taipei_ave_price <- taipei %>%
+  group_by(District) %>%
+  summarise(
+    avg_price = mean(parse_number(LANDPRICE), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Region = "臺北市"
+  ) %>%
+  select(Region, District, avg_price)
+
+taipei_ave_price
+
+```
+
+```{r}
+taipei_pop_data <- aging_data %>%
+  mutate(
+    COUNTY = str_replace_all(COUNTY, "台", "臺")
+  ) %>%
+  filter(COUNTY == "臺北市") %>%
+  select(any_of(c("COUNTY", "TOWN", "A65UP_A15A64_RAT"))) %>%
+  mutate(
+    A65UP_A15A64_RAT = suppressWarnings(as.numeric(A65UP_A15A64_RAT))
+  ) %>%
+  rename(
+    Region   = COUNTY,
+    District = TOWN
+  ) %>%
+  select(Region, District, A65UP_A15A64_RAT)
+
+taipei_pop_data
+```
+
+```{r}
+standardize_cols <- function(df) {
+  df %>% mutate(across(everything(), as.character))
+}
+```
+
+```{r}
+df_med <- bind_rows(
+  medical_data$medical_center %>% standardize_cols() %>% mutate(Level = "醫學中心"),
+  medical_data$hospital_regional %>% standardize_cols() %>% mutate(Level = "區域醫院"),
+  medical_data$hospital_local %>% standardize_cols() %>% mutate(Level = "地區醫院"),
+  medical_data$clinic %>% standardize_cols() %>% mutate(Level = "診所"),
+  medical_data$pharmacy %>% standardize_cols() %>% mutate(Level = "藥局")
+)
+```
+
+```{r}
+medical_summary <- df_med %>%
+  mutate(
+    地址 = iconv(地址, from = "UTF-8", to = "UTF-8", sub = ""),
+    地址 = str_replace_all(地址, "台", "臺"),
+    Region = str_extract(地址, "^.{2,3}?[縣市]"),
+    Address_Clean = str_remove(地址, "^.{2,3}?[縣市]"),
+    District = str_extract(Address_Clean, "^.+?[區鄉鎮市]"),
+    Weight = case_when(
+      Level == "醫學中心" ~ 10,
+      Level == "區域醫院" ~ 5,
+      Level == "地區醫院" ~ 3,
+      Level == "診所" ~ 1,
+      Level == "藥局" ~ 0.5,
+      TRUE ~ 0
+    )
+  ) %>%
+  filter(!is.na(Region), !is.na(District)) %>%
+  group_by(Region, District) %>%
+  summarise(
+    Medical_Score = sum(Weight, na.rm = TRUE),
+    Facility_Count = n(),
+    .groups = "drop"
+  )
+
+medical_taipei <- medical_summary %>%
+  filter(Region == "臺北市") %>%
+  select(Region, District, Medical_Score, Facility_Count)
+
+medical_taipei
+```
+
+```{r}
+taipei_core <- taipei_pop_data %>%
+  inner_join(taipei_ave_price, by = c("Region", "District")) %>%
+  left_join(medical_taipei, by = c("Region", "District")) %>%
+  mutate(
+    Medical_Score = replace_na(Medical_Score, 0),
+    Facility_Count = replace_na(Facility_Count, 0)
+  ) %>%
+  mutate(
+    avg_price = if_else(is.finite(avg_price) & avg_price > 0, avg_price, NA_real_),
+    Log_Price = log(avg_price),
+    Log_Medical = log(Medical_Score + 1),
+    Aging_Burden = A65UP_A15A64_RAT
+  ) %>%
+  filter(
+    is.finite(Log_Price),
+    is.finite(Log_Medical),
+    !is.na(Aging_Burden)
+  )
+
+taipei_core
+```
+
+```{r}
+library(biscale)
+
+get_bi_palette <- function(pal = "DkBlue", dim = 3) {
+  p <- bi_pal(pal = pal, dim = dim, preview = FALSE)
+
+  # Some versions return a function; some return a vector
+  if (is.function(p)) p <- p(dim * dim)
+
+  # If unnamed, assign the standard biscale class order
+  if (is.null(names(p))) {
+    names(p) <- c(
+      "1-1","2-1","3-1",
+      "1-2","2-2","3-2",
+      "1-3","2-3","3-3"
+    )
+  }
+  p
+}
+
+pal_vec <- get_bi_palette("DkBlue", 3)
+
+labels_need_care <- c(
+  "1-1" = "Low need / Low care",
+  "1-2" = "Low need / Mid care",
+  "1-3" = "Low need / High care",
+  "2-1" = "Mid need / Low care",
+  "2-2" = "Mid need / Mid care",
+  "2-3" = "Mid need / High care",
+  "3-1" = "High need / Low care (Inverse care)",
+  "3-2" = "High need / Mid care",
+  "3-3" = "High need / High care"
+)
+
+```
+
+```{r}
+# 1) Choose the township/district boundary layer, filter to Taipei City
+town_sf <- map_data[["TOWN_MOI_1140318.shp"]] %>%
+  st_make_valid() %>%
+  mutate(
+    TOWNNAME_key = str_squish(TOWNNAME),
+    COUNTYNAME_key = str_replace_all(str_squish(COUNTYNAME), "台", "臺")
+  )
+
+town_sf_taipei <- town_sf %>%
+  filter(COUNTYNAME_key == "臺北市")
+
+```
+
+```{r}
+# 2) Join taipei_core onto polygons
+core_keyed <- taipei_core %>%
+  mutate(
+    TOWNNAME_key = str_squish(District),
+    Aging_Burden = as.numeric(Aging_Burden),
+    Medical_Score = as.numeric(Medical_Score)
+  )
+
+joined_sf_taipei <- town_sf_taipei %>%
+  left_join(
+    core_keyed %>% select(TOWNNAME_key, Aging_Burden, Medical_Score),
+    by = "TOWNNAME_key"
+  )
+
+# Optional: check any join mismatches
+anti_join(
+  core_keyed %>% distinct(TOWNNAME_key),
+  town_sf_taipei %>% st_drop_geometry() %>% distinct(TOWNNAME_key),
+  by = "TOWNNAME_key"
+)
+
+```
+
+```{r}
+# 3) Bivariate classification (Need vs Care)
+map_need_care_taipei <- joined_sf_taipei %>%
+  filter(!is.na(Aging_Burden), !is.na(Medical_Score)) %>%
+  bi_class(x = Aging_Burden, y = Medical_Score, style = "quantile", dim = 3)
+
+```
+
+```{r}
+# 4) Plot with district labels placed inside polygons
+map_need_care_taipei_lab <- map_need_care_taipei %>%
+  mutate(label_pt = st_point_on_surface(geometry)) %>%
+  st_set_geometry("label_pt")
+
+ggplot(map_need_care_taipei) +
+  geom_sf(aes(fill = bi_class), color = NA) +
+  geom_sf_text(
+    data = map_need_care_taipei_lab,
+    aes(label = TOWNNAME),
+    size = 3
+  ) +
+  scale_fill_manual(
+    values = pal_vec,
+    breaks = names(labels_need_care),
+    labels = labels_need_care,
+    drop = FALSE
+  ) +
+  labs(
+    title = "Bivariate Map: Need vs Care (Taipei City)",
+    subtitle = "Need = Aging_Burden; Care = Medical_Score (3x3 quantiles)",
+    fill = "Need–Care"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+# =========================
+# English translation for Taipei bivariate map district labels
+# Replace ONLY your last plotting chunk with this
+# =========================
+
+# --- English lookup table for Taipei City districts ---
+district_en <- c(
+  "松山區" = "Songshan District",
+  "信義區" = "Xinyi District",
+  "大安區" = "Da'an District",
+  "中山區" = "Zhongshan District",
+  "中正區" = "Zhongzheng District",
+  "大同區" = "Datong District",
+  "萬華區" = "Wanhua District",
+  "文山區" = "Wenshan District",
+  "南港區" = "Nangang District",
+  "內湖區" = "Neihu District",
+  "士林區" = "Shilin District",
+  "北投區" = "Beitou District"
+)
+
+map_need_care_taipei_en <- map_need_care_taipei %>%
+  mutate(
+    TOWNNAME_key = str_squish(str_replace_all(TOWNNAME, "台", "臺")),
+    TOWNNAME_EN  = dplyr::recode(TOWNNAME_key, !!!district_en, .default = TOWNNAME_key)
+  )
+
+map_need_care_taipei_lab_en <- map_need_care_taipei_en %>%
+  mutate(label_pt = st_point_on_surface(geometry)) %>%
+  st_set_geometry("label_pt")
+
+ggplot(map_need_care_taipei_en) +
+  geom_sf(aes(fill = bi_class), color = NA) +
+  geom_sf_text(
+    data = map_need_care_taipei_lab_en,
+    aes(label = TOWNNAME_EN),
+    size = 3
+  ) +
+  scale_fill_manual(
+    values = pal_vec,
+    breaks = names(labels_need_care),
+    labels = labels_need_care,
+    drop = FALSE
+  ) +
+  labs(
+    title = "Bivariate Map: Need vs Care (Taipei City)",
+    subtitle = "Need = Aging_Burden; Care = Medical_Score (3x3 quantiles)",
+    fill = "Need–Care"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+# =========================
+# Fix overlapping district labels (use ggrepel on label coordinates)
+# Replace your plotting chunk with this version
+# =========================
+
+library(ggrepel)
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+# Project to a meter-based CRS so repelling behaves well
+map_poly <- map_need_care_taipei_en %>%
+  st_transform(3826)  # TWD97 / TM2 zone 121 (meters)
+
+# Build a label table with explicit x/y coordinates
+label_df <- map_poly %>%
+  mutate(label_pt = st_point_on_surface(geometry)) %>%
+  mutate(
+    x = st_coordinates(label_pt)[, 1],
+    y = st_coordinates(label_pt)[, 2]
+  ) %>%
+  st_drop_geometry() %>%
+  select(TOWNNAME_EN, x, y)
+
+ggplot(map_poly) +
+  geom_sf(aes(fill = bi_class), color = NA) +
+  ggrepel::geom_text_repel(
+    data = label_df,
+    aes(x = x, y = y, label = TOWNNAME_EN),
+    size = 3,
+    box.padding = 0.4,
+    point.padding = 0.2,
+    force = 2,
+    max.overlaps = Inf,
+    min.segment.length = 0,
+    segment.alpha = 0.4,
+    seed = 123
+  ) +
+  scale_fill_manual(
+    values = pal_vec,
+    breaks = names(labels_need_care),
+    labels = labels_need_care,
+    drop = FALSE
+  ) +
+  labs(
+    title = "Bivariate Map: Need vs Care (Taipei City)",
+    subtitle = "Need = Aging_Burden; Care = Medical_Score (3x3 quantiles)",
+    fill = "Need–Care"
+  ) +
+  coord_sf(crs = st_crs(map_poly)) +
+  theme_minimal()
+
+```
+

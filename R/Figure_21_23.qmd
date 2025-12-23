@@ -1,0 +1,437 @@
+---
+title: "sj_1217_v1"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+library(stringr)
+library(readr)
+library(here)
+library(ggplot2)
+```
+
+```{r}
+suppressMessages(suppressWarnings(
+  source(here::here("R", "load_data.R"))
+))
+```
+
+```{r}
+# Average land price by township/district
+hsinchu <- list("j_lvr_land_a.csv", "o_lvr_land_a.csv") %>%
+lapply(function(file) {
+
+df <- real_estate_data[[file]]
+
+# Promote first row to header
+colnames(df) <- as.character(unlist(df[1, ]))
+df <- df[-1, , drop = FALSE]
+
+# Select by name (more stable than column index)
+df %>%
+  dplyr::select(dplyr::any_of(c(
+    "The villages and towns urban district",
+    "main use",
+    "the unit price (NTD / square meter)"
+  )))
+
+}) %>%
+bind_rows()
+
+hsinchu <- hsinchu %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+hsinchu_ave_price <- hsinchu %>%
+group_by(TOWNNAME) %>%
+summarise(
+avg_price = mean(parse_number(LANDPRICE), na.rm = TRUE),
+.groups = "drop"
+)
+
+price_to_copy <- hsinchu_ave_price %>%
+filter(TOWNNAME == "新竹市") %>%
+pull(avg_price) %>%
+first()
+
+if (length(price_to_copy) == 1 && !is.na(price_to_copy)) {
+hsinchu_ave_price <- hsinchu_ave_price %>%
+add_row(
+TOWNNAME = c("北區", "香山區", "東區"),
+avg_price = price_to_copy
+) %>%
+filter(TOWNNAME != "新竹市")
+}
+
+hsinchu_ave_price
+```
+
+```{r}
+hsinchu_pop_data <- aging_data %>%
+filter(COUNTY %in% c("新竹縣", "新竹市")) %>%
+select(any_of(c("COUNTY", "TOWN", "A65UP_A15A64_RAT"))) %>%
+mutate(
+A65UP_A15A64_RAT = suppressWarnings(as.numeric(A65UP_A15A64_RAT))
+) %>%
+rename(TOWNNAME = TOWN)
+
+hsinchu_pop_data
+```
+
+```{r}
+standardize_cols <- function(df) {
+df %>% mutate(across(everything(), as.character))
+}
+```
+
+```{r}
+df_med <- bind_rows(
+medical_data$medical_center %>% standardize_cols() %>% mutate(Level = "醫學中心"),
+medical_data$hospital_regional %>% standardize_cols() %>% mutate(Level = "區域醫院"),
+medical_data$hospital_local %>% standardize_cols() %>% mutate(Level = "地區醫院"),
+medical_data$clinic %>% standardize_cols() %>% mutate(Level = "診所"),
+medical_data$pharmacy %>% standardize_cols() %>% mutate(Level = "藥局")
+)
+```
+
+```{r}
+medical_summary <- df_med %>%
+mutate(
+地址 = iconv(地址, from = "UTF-8", to = "UTF-8", sub = ""),
+地址 = str_replace_all(地址, "台", "臺"),
+Region = str_extract(地址, "^.{2,3}?[縣市]"),
+Address_Clean = str_remove(地址, "^.{2,3}?[縣市]"),
+District = str_extract(Address_Clean, "^.+?[區鄉鎮市]"),
+Weight = case_when(
+Level == "醫學中心" ~ 10,
+Level == "區域醫院" ~ 5,
+Level == "地區醫院" ~ 3,
+Level == "診所" ~ 1,
+Level == "藥局" ~ 0.5,
+TRUE ~ 0
+)
+) %>%
+filter(!is.na(Region), !is.na(District)) %>%
+group_by(Region, District) %>%
+summarise(
+Medical_Score = sum(Weight, na.rm = TRUE),
+Facility_Count = n(),
+.groups = "drop"
+)
+
+medical_hsinchu <- medical_summary %>%
+filter(Region %in% c("新竹市", "新竹縣"))
+```
+
+```{r}
+land_hsinchu <- hsinchu_ave_price %>%
+mutate(
+District = TOWNNAME,
+Region = if_else(District %in% c("北區", "香山區", "東區"), "新竹市", "新竹縣")
+) %>%
+select(Region, District, avg_price)
+```
+
+```{r}
+aging_hsinchu <- hsinchu_pop_data %>%
+mutate(
+Region = COUNTY,
+District = TOWNNAME
+) %>%
+select(Region, District, A65UP_A15A64_RAT)
+```
+
+```{r}
+medical_hsinchu <- medical_hsinchu %>%
+select(Region, District, Medical_Score, Facility_Count)
+```
+
+```{r}
+hsinchu_core <- aging_hsinchu %>%
+inner_join(land_hsinchu, by = c("Region", "District")) %>%
+left_join(medical_hsinchu, by = c("Region", "District")) %>%
+mutate(
+Medical_Score = replace_na(Medical_Score, 0),
+Facility_Count = replace_na(Facility_Count, 0)
+)
+
+hsinchu_core
+```
+
+```{r}
+hsinchu_core <- hsinchu_core %>%
+mutate(
+avg_price = if_else(is.finite(avg_price) & avg_price > 0, avg_price, NA_real_),
+Log_Price = log(avg_price),
+Log_Medical = log(Medical_Score + 1),
+Aging_Burden = A65UP_A15A64_RAT
+) %>%
+filter(
+is.finite(Log_Price),
+is.finite(Log_Medical),
+!is.na(Aging_Burden)
+)
+```
+
+```{r}
+# Add this once (near your other libraries)
+library(ggrepel)
+
+ggplot(
+  hsinchu_core,
+  aes(x = Aging_Burden, y = Log_Medical, size = Log_Price)
+) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  ggrepel::geom_text_repel(
+    aes(label = District),      # labels per dot
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(name = "Housing Price (log)") +
+  labs(
+    title = "Inverse Care Law in Hsinchu: Aging, Housing Prices, and Medical Resources",
+    x = "Aging Burden (Elderly Dependency Ratio)",
+    y = "Medical Resource Availability (log score)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Quadrant scatter with township labels
+# (Uses ggrepel to avoid overlapping text)
+
+library(ggrepel)
+
+hsinchu_quadrant <- hsinchu_core %>%
+  dplyr::mutate(
+    Price_Tier = dplyr::ntile(avg_price, 3),
+    Price_Tier = factor(
+      Price_Tier,
+      levels = c(1, 2, 3),
+      labels = c("Low price", "Mid price", "High price")
+    ),
+    Town_Label = District
+  )
+
+x_cut <- stats::median(hsinchu_quadrant$Aging_Burden, na.rm = TRUE)
+y_cut <- stats::median(hsinchu_quadrant$Medical_Score, na.rm = TRUE)
+
+hsinchu_quadrant <- hsinchu_quadrant %>%
+  dplyr::mutate(
+    Need_Level = dplyr::if_else(Aging_Burden >= x_cut, "High need", "Low need"),
+    Care_Level = dplyr::if_else(Medical_Score >= y_cut, "High care", "Low care"),
+    Quadrant   = paste(Need_Level, Care_Level, sep = " / ")
+  )
+
+ggplot2::ggplot(
+  hsinchu_quadrant,
+  ggplot2::aes(
+    x = Aging_Burden,
+    y = Medical_Score,
+    color = Price_Tier,
+    shape = Price_Tier
+  )
+) +
+  ggplot2::geom_vline(xintercept = x_cut, linetype = "dotted") +
+  ggplot2::geom_hline(yintercept = y_cut, linetype = "dotted") +
+  ggplot2::geom_point(alpha = 0.85, size = 3) +
+  ggrepel::geom_text_repel(
+    ggplot2::aes(label = Town_Label),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  ggplot2::labs(
+    title = "Validating the Inverse Care Law: Need vs Care with Housing Price Tier",
+    subtitle = paste0(
+      "Quadrant cutoffs use medians: need = ", round(x_cut, 2),
+      ", care = ", round(y_cut, 2)
+    ),
+    x = "Need: Elderly Dependency Ratio (Aging Burden)",
+    y = "Care: Medical Resource Density (Medical Score)",
+    color = "Housing price tier",
+    shape = "Housing price tier"
+  ) +
+  ggplot2::theme_minimal()
+```
+
+```{r}
+# =========================
+# English translation for labels in BOTH scatter plots (Hsinchu)
+# Add this block BEFORE the two ggplot() calls (so District labels become English)
+# =========================
+
+# Region + district/township English lookup
+region_en <- c(
+  "新竹市" = "Hsinchu City",
+  "新竹縣" = "Hsinchu County"
+)
+
+district_en <- c(
+  # Hsinchu City districts
+  "東區"   = "East District",
+  "北區"   = "North District",
+  "香山區" = "Xiangshan District",
+
+  # Hsinchu County townships/cities
+  "竹北市" = "Zhubei City",
+  "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",
+  "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",
+  "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township",
+  "寶山鄉" = "Baoshan Township",
+  "北埔鄉" = "Beipu Township",
+  "峨眉鄉" = "Emei Township",
+  "橫山鄉" = "Hengshan Township",
+  "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township"
+)
+
+# Create English label columns (fallback to Chinese if not found)
+hsinchu_core_en <- hsinchu_core %>%
+  mutate(
+    Region_EN   = dplyr::recode(Region,   !!!region_en,   .default = as.character(Region)),
+    District_EN = dplyr::recode(District, !!!district_en, .default = as.character(District))
+  )
+
+# =========================
+# Scatter 1: Aging vs Medical (size = log price) WITH English labels
+# =========================
+library(ggrepel)
+
+ggplot(
+  hsinchu_core_en,
+  aes(x = Aging_Burden, y = Log_Medical, size = Log_Price)
+) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  ggrepel::geom_text_repel(
+    aes(label = District_EN),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(name = "Housing Price (log)") +
+  labs(
+    title = "Inverse Care Law in Hsinchu: Aging, Housing Prices, and Medical Resources",
+    x = "Aging Burden (Elderly Dependency Ratio)",
+    y = "Medical Resource Availability (log score)"
+  ) +
+  theme_minimal()
+
+# =========================
+# Scatter 2: Quadrant plot WITH English labels
+# =========================
+hsinchu_quadrant_en <- hsinchu_core_en %>%
+  dplyr::mutate(
+    Price_Tier = dplyr::ntile(avg_price, 3),
+    Price_Tier = factor(
+      Price_Tier,
+      levels = c(1, 2, 3),
+      labels = c("Low price", "Mid price", "High price")
+    ),
+    Town_Label = District_EN
+  )
+
+x_cut <- stats::median(hsinchu_quadrant_en$Aging_Burden, na.rm = TRUE)
+y_cut <- stats::median(hsinchu_quadrant_en$Medical_Score, na.rm = TRUE)
+
+hsinchu_quadrant_en <- hsinchu_quadrant_en %>%
+  dplyr::mutate(
+    Need_Level = dplyr::if_else(Aging_Burden >= x_cut, "High need", "Low need"),
+    Care_Level = dplyr::if_else(Medical_Score >= y_cut, "High care", "Low care"),
+    Quadrant   = paste(Need_Level, Care_Level, sep = " / ")
+  )
+
+ggplot2::ggplot(
+  hsinchu_quadrant_en,
+  ggplot2::aes(
+    x = Aging_Burden,
+    y = Medical_Score,
+    color = Price_Tier,
+    shape = Price_Tier
+  )
+) +
+  ggplot2::geom_vline(xintercept = x_cut, linetype = "dotted") +
+  ggplot2::geom_hline(yintercept = y_cut, linetype = "dotted") +
+  ggplot2::geom_point(alpha = 0.85, size = 3) +
+  ggrepel::geom_text_repel(
+    ggplot2::aes(label = Town_Label),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  ggplot2::labs(
+    title = "Validating the Inverse Care Law: Need vs Care with Housing Price Tier",
+    subtitle = paste0(
+      "Quadrant cutoffs use medians: need = ", round(x_cut, 2),
+      ", care = ", round(y_cut, 2)
+    ),
+    x = "Need: Elderly Dependency Ratio (Aging Burden)",
+    y = "Care: Medical Resource Density (Medical Score)",
+    color = "Housing price tier",
+    shape = "Housing price tier"
+  ) +
+  ggplot2::theme_minimal()
+
+
+```
+
+```{r}
+med_ref <- mean(hsinchu_core_en$Log_Medical, na.rm = TRUE)
+
+ggplot(
+  hsinchu_core_en,
+  aes(x = Aging_Burden, y = Log_Medical, size = Log_Price)
+) +
+  geom_point(alpha = 0.7) +
+  # Linear regression WITH shaded confidence band
+  geom_smooth(
+    aes(size = NULL),
+    method = "lm",
+    se = TRUE,
+    level = 0.95,
+    linetype = "dashed"
+  ) +
+  geom_hline(yintercept = med_ref, linetype = "dotted") +
+  ggrepel::geom_text_repel(
+    aes(label = District_EN),
+    size = 3,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(name = "Housing Price (log)") +
+  labs(
+    title = "Inverse Care Law in Hsinchu: Aging, Housing Prices, and Medical Resources",
+    subtitle = paste0(
+      "Dashed = LM trend with 95% CI band; Mean medical availability (log) = ",
+      round(med_ref, 2)
+    ),
+    x = "Aging Burden (Elderly Dependency Ratio)",
+    y = "Medical Resource Availability (log score)"
+  ) +
+  theme_minimal()
+
+
+```
