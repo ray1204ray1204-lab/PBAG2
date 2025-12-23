@@ -304,7 +304,6 @@ p_taipei_price_vs_aging
 
 library(ggrepel)
 
-# --- 0) English lookup tables ---
 region_en <- c(
   "臺北市" = "Taipei City"
 )
@@ -324,7 +323,6 @@ district_en <- c(
   "北投區" = "Beitou District"
 )
 
-# --- 1) Average land price by district (Taipei City) ---
 taipei <- list("a_lvr_land_a.csv") %>%
   lapply(function(file) {
     df <- real_estate_data[[file]]
@@ -363,7 +361,6 @@ taipei_ave_price <- taipei %>%
   ) %>%
   select(Region, District, avg_price)
 
-# --- 2) Aging index by district (Taipei City) ---
 aging_taipei <- aging_data %>%
   filter(COUNTY %in% c("臺北市", "台北市")) %>%
   mutate(
@@ -380,7 +377,6 @@ aging_taipei <- aging_data %>%
   ) %>%
   select(Region, District, A65UP_A15A64_RAT)
 
-# --- 3) Join core + create English columns for plotting ---
 taipei_core <- aging_taipei %>%
   inner_join(taipei_ave_price, by = c("Region", "District")) %>%
   mutate(
@@ -394,7 +390,6 @@ taipei_core <- aging_taipei %>%
     is.finite(avg_price)
   )
 
-# --- 4) Scatter plot (English labels) ---
 taipei_scatter_df_en <- taipei_core %>%
   transmute(
     Region = factor(Region_EN, levels = c("Taipei City")),
@@ -434,4 +429,3 @@ p_taipei_price_vs_aging_en <- ggplot(
 p_taipei_price_vs_aging_en
 
 ```
-

@@ -181,7 +181,6 @@ is.finite(Log_Medical),
 ```
 
 ```{r}
-# Add this once (near your other libraries)
 library(ggrepel)
 
 ggplot(
@@ -208,8 +207,6 @@ ggplot(
 ```
 
 ```{r}
-# Quadrant scatter with township labels
-# (Uses ggrepel to avoid overlapping text)
 
 library(ggrepel)
 
@@ -269,10 +266,6 @@ ggplot2::ggplot(
 ```
 
 ```{r}
-# =========================
-# English translation for labels in BOTH scatter plots (Hsinchu)
-# Add this block BEFORE the two ggplot() calls (so District labels become English)
-# =========================
 
 # Region + district/township English lookup
 region_en <- c(
@@ -302,16 +295,12 @@ district_en <- c(
   "五峰鄉" = "Wufeng Township"
 )
 
-# Create English label columns (fallback to Chinese if not found)
 hsinchu_core_en <- hsinchu_core %>%
   mutate(
     Region_EN   = dplyr::recode(Region,   !!!region_en,   .default = as.character(Region)),
     District_EN = dplyr::recode(District, !!!district_en, .default = as.character(District))
   )
 
-# =========================
-# Scatter 1: Aging vs Medical (size = log price) WITH English labels
-# =========================
 library(ggrepel)
 
 ggplot(
@@ -336,9 +325,6 @@ ggplot(
   ) +
   theme_minimal()
 
-# =========================
-# Scatter 2: Quadrant plot WITH English labels
-# =========================
 hsinchu_quadrant_en <- hsinchu_core_en %>%
   dplyr::mutate(
     Price_Tier = dplyr::ntile(avg_price, 3),

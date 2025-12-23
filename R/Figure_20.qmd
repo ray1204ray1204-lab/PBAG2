@@ -25,7 +25,6 @@ suppressMessages(suppressWarnings(
 ```{r}
 taipei_land_files <- c("a_lvr_land_a.csv")
 
-# Fail fast with a helpful message if the file name does not exist in your loaded list.
 if (!all(taipei_land_files %in% names(real_estate_data))) {
   stop(
     "These files were not found in real_estate_data: ",
@@ -170,10 +169,8 @@ library(biscale)
 get_bi_palette <- function(pal = "DkBlue", dim = 3) {
   p <- bi_pal(pal = pal, dim = dim, preview = FALSE)
 
-  # Some versions return a function; some return a vector
   if (is.function(p)) p <- p(dim * dim)
 
-  # If unnamed, assign the standard biscale class order
   if (is.null(names(p))) {
     names(p) <- c(
       "1-1","2-1","3-1",
@@ -229,7 +226,6 @@ joined_sf_taipei <- town_sf_taipei %>%
     by = "TOWNNAME_key"
   )
 
-# Optional: check any join mismatches
 anti_join(
   core_keyed %>% distinct(TOWNNAME_key),
   town_sf_taipei %>% st_drop_geometry() %>% distinct(TOWNNAME_key),
@@ -273,11 +269,8 @@ ggplot(map_need_care_taipei) +
   theme_minimal()
 
 ```
+
 ```{r}
-# =========================
-# English translation for Taipei bivariate map district labels
-# Replace ONLY your last plotting chunk with this
-# =========================
 
 # --- English lookup table for Taipei City districts ---
 district_en <- c(
@@ -328,10 +321,7 @@ ggplot(map_need_care_taipei_en) +
 ```
 
 ```{r}
-# =========================
-# Fix overlapping district labels (use ggrepel on label coordinates)
-# Replace your plotting chunk with this version
-# =========================
+
 
 library(ggrepel)
 library(sf)
@@ -381,4 +371,3 @@ ggplot(map_poly) +
   theme_minimal()
 
 ```
-

@@ -1,0 +1,485 @@
+---
+title: "01_intro_real estate_2"
+format: html
+editor: visual
+---
+
+# 
+
+```{r message=FALSE, warning=FALSE}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(ggplot2)
+library(stringr)
+library(here)
+library(ggrepel)
+
+```
+
+```{r}
+# ==============================================================================
+# Data Loading Section (Absolute Path Fix)
+# ==============================================================================
+
+# 1. 直接指定絕對路徑 (強制告訴 R 資料在哪裡)
+# 注意：路徑中的反斜線 "\" 都要改成正斜線 "/"
+project_root <- "C:/Users/ray12/PBAG2"
+
+csv_dir <- file.path(project_root, "data", "lvr_landcsv114Q3")
+shp_dir <- file.path(project_root, "data", "map")
+
+# 再次檢查路徑是否正確 (會在 Console 印出結果)
+cat("設定 CSV 路徑:", csv_dir, "\n")
+cat("設定 Map 路徑:", shp_dir, "\n")
+
+if (!dir.exists(csv_dir)) stop(paste("❌ 仍然找不到 CSV 資料夾 ->", csv_dir, "\n請檢查路徑拼字是否完全正確。"))
+if (!dir.exists(shp_dir)) stop(paste("❌ 仍然找不到 Map 資料夾 ->", shp_dir))
+
+# ------------------------------------------------------------------------------
+# 2. 建立 real_estate_data 列表
+# ------------------------------------------------------------------------------
+library(readr)
+library(sf)
+
+real_estate_data <- list()
+
+# 列出所有 CSV 檔案
+csv_files <- list.files(csv_dir, pattern = "\\.csv$", full.names = TRUE)
+
+if(length(csv_files) == 0) {
+  stop("❌ 路徑正確，但在資料夾中找不到任何 .csv 檔案！請檢查資料夾內容。")
+}
+
+cat("✅ 找到", length(csv_files), "個 CSV 檔案，正在讀取...\n")
+
+for (f in csv_files) {
+  fname <- basename(f)
+  # 讀取檔案，強制所有欄位為文字
+  real_estate_data[[fname]] <- read_csv(f, col_types = cols(.default = "c"), show_col_types = FALSE)
+}
+
+# ------------------------------------------------------------------------------
+# 3. 建立 map_data 列表
+# ------------------------------------------------------------------------------
+map_data <- list()
+shp_name <- "TOWN_MOI_1140318.shp"
+shp_path <- file.path(shp_dir, shp_name)
+
+if (file.exists(shp_path)) {
+  cat("✅ 正在讀取 Shapefile 地圖...\n")
+  sf_obj <- st_read(shp_path, quiet = TRUE)
+  map_data[[shp_name]] <- sf_obj
+} else {
+  stop(paste("❌ 找不到 Shapefile ->", shp_path))
+}
+
+cat("\n🎉 資料載入大成功！可以繼續執行後面的畫圖程式碼了。\n")
+
+
+# Function to save plots
+save_map_plot <- function(plot,
+                      filename,
+                      width = 13,
+                      height = 8,
+                      dpi = 300,
+                      folder = "plots") {
+
+  if (!dir.exists(folder)) {
+    dir.create(folder, recursive = TRUE)
+  }
+
+  filepath <- file.path(folder, filename)
+
+  ggsave(filepath,
+         plot = plot,
+         width = width,
+         height = height,
+         dpi = dpi)
+}
+
+```
+
+# Translation Dictionary
+
+```{r}
+# Define District Name Mapping (Chinese -> English)
+district_map <- c(
+  # Hsinchu City
+  "新竹市" = "Hsinchu City", 
+  "東區" = "East Dist.",
+  "北區" = "North Dist.",
+  "香山區" = "Xiangshan Dist.",
+  
+  # Hsinchu County
+  "竹北市" = "Zhubei City",
+  "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",
+  "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",
+  "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township",
+  "橫山鄉" = "Hengshan Township",
+  "北埔鄉" = "Beipu Township",
+  "寶山鄉" = "Baoshan Township",
+  "峨眉鄉" = "Emei Township",
+  "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township",
+  
+  # Taipei City
+  "中正區" = "Zhongzheng Dist.",
+  "大同區" = "Datong Dist.",
+  "中山區" = "Zhongshan Dist.",
+  "松山區" = "Songshan Dist.",
+  "大安區" = "Da'an Dist.",
+  "萬華區" = "Wanhua Dist.",
+  "信義區" = "Xinyi Dist.",
+  "士林區" = "Shilin Dist.",
+  "北投區" = "Beitou Dist.",
+  "內湖區" = "Neihu Dist.",
+  "南港區" = "Nangang Dist.",
+  "文山區" = "Wenshan Dist."
+)
+
+# Function to translate names safely
+translate_name <- function(names) {
+  sapply(names, function(x) ifelse(x %in% names(district_map), district_map[x], x))
+}
+
+```
+
+# Load Map Data
+
+```{r}
+# Load township-level shapefile
+map_data_raw <- map_data[["TOWN_MOI_1140318.shp"]]
+
+```
+
+# Average Land Prices
+
+## Hsinchu Region (City & County)
+
+### Data Processing
+
+```{r}
+# 1. Load and Combine Data
+hsinchu <- list("j_lvr_land_a.csv", "o_lvr_land_a.csv") %>%
+  lapply(function(file) {
+    real_estate_data[[file]] %>%
+      {
+        colnames(.) <- as.character(unlist(.[1, ]))
+        .[-1, ]
+      } %>%
+      select(1, 13, 23) 
+  }) %>%
+  bind_rows()
+
+# 2. Filter and Rename
+hsinchu <- hsinchu %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+# 3. Calculate Average Price
+hsinchu_ave_price <- hsinchu %>%
+  group_by(TOWNNAME) %>%
+  summarise(
+    avg_price = mean(
+      as.numeric(str_replace_all(LANDPRICE, ",", "")),
+      na.rm = TRUE
+    )
+  )
+
+# 4. Handle Hsinchu City Split
+price_to_copy <- hsinchu_ave_price %>%
+  filter(TOWNNAME == "新竹市") %>%
+  pull(avg_price)
+
+if(length(price_to_copy) > 0) {
+    hsinchu_ave_price <- hsinchu_ave_price %>%
+      add_row(
+        TOWNNAME = c("北區", "香山區", "東區"),
+        avg_price = rep(price_to_copy, 3)
+      ) %>%
+      filter(TOWNNAME != "新竹市")
+}
+
+# 5. Add English Names and Label Text
+hsinchu_ave_price <- hsinchu_ave_price %>%
+  mutate(
+    TOWNNAME_ENG = translate_name(TOWNNAME),
+    # Create label: "Name \n Price"
+    LABEL_TEXT = paste0(TOWNNAME_ENG, "\n", comma(round(avg_price, 0)))
+  )
+
+print(head(hsinchu_ave_price))
+
+```
+
+### Visualization: Bar Plot
+
+```{r}
+# Create the bar plot object
+p_hsinchu_bar <- ggplot(hsinchu_ave_price, aes(x = reorder(TOWNNAME_ENG, avg_price), y = avg_price)) +
+  geom_col(fill = "steelblue") +
+  
+  # Add labels with commas (e.g., 350,000)
+  geom_text(aes(label = comma(round(avg_price, 0))), 
+            hjust = -0.1, 
+            size = 3.5) +
+  
+  coord_flip() +
+  
+  # Y-axis formatting
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.15))) + # Add space for labels
+  
+  labs(
+    x = "District / Township",
+    y = "Average Unit Price (NTD / m²)",
+    title = "Average Real Estate Unit Price: Hsinchu Region"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    axis.text = element_text(size = 11),
+    panel.grid.major.y = element_blank() # Clean look
+  )
+
+# Print and Save
+print(p_hsinchu_bar)
+save_map_plot(p_hsinchu_bar, "hsinchu_bar_english.png")
+
+```
+
+### Map Integration
+
+```{r}
+hsinchu_map_data <- map_data_raw %>%
+  filter(COUNTYNAME %in% c("新竹縣", "新竹市")) %>%
+  select(TOWNNAME, geometry)
+
+hsinchu_map_data <- hsinchu_map_data %>%
+  left_join(hsinchu_ave_price, by = "TOWNNAME") %>%
+  replace_na(list(avg_price = NA))
+
+# Calculate centroids for ggrepel
+# This creates X and Y coordinates for label placement
+hsinchu_coords <- suppressWarnings(st_centroid(hsinchu_map_data)) %>%
+  st_coordinates() %>%
+  as.data.frame()
+
+hsinchu_map_data <- bind_cols(hsinchu_map_data, hsinchu_coords)
+
+```
+
+### Visualization: Heatmap with Leader Lines
+
+```{r}
+hsinchu_map <- ggplot(hsinchu_map_data) +
+  geom_sf(aes(fill = avg_price), color = "white", size = 0.2) +
+  
+  # Use ggrepel for non-overlapping labels with lines
+  geom_text_repel(
+    aes(x = X, y = Y, label = LABEL_TEXT),
+    size = 3,
+    fontface = "bold",
+    color = "black",
+    bg.color = "white", # White outline (halo) for readability
+    bg.r = 0.15,
+    min.segment.length = 0, # Always draw lines if moved
+    segment.color = "grey50",
+    force = 5, # Push labels away from each other
+    box.padding = 0.5
+  ) +
+  
+  scale_fill_gradient(low = "#ADD8E6", high = "#8B0000", 
+                      na.value = "gray95", labels = comma) +
+  labs(
+    title = "Hsinchu Region Land Prices Map",
+    subtitle = "Labels show: District / Unit Price (NTD/m²)",
+    fill = "Price (NTD/m²)"
+  ) +
+  theme_minimal() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank())
+
+hsinchu_map
+save_map_plot(hsinchu_map, "hsinchu_map_english.png")
+
+```
+
+## Taipei City
+
+### Data Processing
+
+```{r}
+# 1. Load Data
+taipei <- ("a_lvr_land_a.csv") %>%
+  lapply(function(file) {
+    real_estate_data[[file]] %>%
+      {
+        colnames(.) <- as.character(unlist(.[1, ]))
+        .[-1, ]
+      } %>%
+      select(1, 13, 23)
+  }) %>%
+  bind_rows()
+
+# 2. Filter and Rename
+taipei <- taipei %>%
+  filter(`main use` %in% c("住家用", "住商用", "住工用")) %>%
+  rename(TOWNNAME = `The villages and towns urban district`) %>%
+  rename(LANDPRICE = `the unit price (NTD / square meter)`)
+
+# 3. Calculate Average
+taipei_ave_price <- taipei %>%
+  group_by(TOWNNAME) %>%
+  summarise(
+    avg_price = mean(
+      as.numeric(str_replace_all(LANDPRICE, ",", "")),
+      na.rm = TRUE
+    )
+  )
+
+# 4. Add English Names and Label Text
+taipei_ave_price <- taipei_ave_price %>%
+  mutate(
+    TOWNNAME_ENG = translate_name(TOWNNAME),
+    LABEL_TEXT = paste0(TOWNNAME_ENG, "\n", comma(round(avg_price, 0)))
+  )
+
+print(head(taipei_ave_price))
+
+```
+
+### Visualization: Bar Plot
+
+```{r}
+# Create the bar plot object
+p_taipei_bar <- ggplot(taipei_ave_price, aes(x = reorder(TOWNNAME_ENG, avg_price), y = avg_price)) +
+  geom_col(fill = "steelblue") +
+  
+  geom_text(aes(label = comma(round(avg_price, 0))), 
+            hjust = -0.1, 
+            size = 3.5) +
+  
+  coord_flip() +
+  
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.15))) +
+  
+  labs(
+    x = "District",
+    y = "Average Unit Price (NTD / m²)",
+    title = "Average Real Estate Unit Price: Taipei City"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    axis.text = element_text(size = 11),
+    panel.grid.major.y = element_blank()
+  )
+
+# Print and Save
+print(p_taipei_bar)
+save_map_plot(p_taipei_bar, "taipei_bar_english.png")
+
+```
+
+### Map Integration
+
+```{r}
+taipei_map_data <- map_data_raw %>%
+  filter(COUNTYNAME %in% c("臺北市")) %>%
+  select(TOWNNAME, geometry)
+
+taipei_map_data <- taipei_map_data %>%
+  left_join(taipei_ave_price, by = "TOWNNAME") %>%
+  replace_na(list(avg_price = NA))
+
+# Calculate centroids
+taipei_coords <- suppressWarnings(st_centroid(taipei_map_data)) %>%
+  st_coordinates() %>%
+  as.data.frame()
+
+taipei_map_data <- bind_cols(taipei_map_data, taipei_coords)
+
+```
+
+### Visualization: Heatmap with Leader Lines
+
+```{r}
+taipei_map <- ggplot(taipei_map_data) +
+  geom_sf(aes(fill = avg_price), color = "white", size = 0.2) +
+  
+  geom_text_repel(
+    aes(x = X, y = Y, label = LABEL_TEXT),
+    size = 3,
+    fontface = "bold",
+    color = "black",
+    bg.color = "white",
+    bg.r = 0.15,
+    min.segment.length = 0,
+    segment.color = "grey50",
+    force = 10, # Higher force for Taipei's dense districts
+    box.padding = 0.4
+  ) +
+  
+  scale_fill_gradient(low = "#ADD8E6", high = "#8B0000", 
+                      na.value = "gray95", labels = comma) +
+  labs(
+    title = "Taipei City Land Prices Map",
+    subtitle = "Labels show: District / Unit Price (NTD/m²)",
+    fill = "Price (NTD/m²)"
+  ) +
+  theme_minimal() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank())
+
+taipei_map
+save_map_plot(taipei_map, "taipei_map_english.png")
+
+```
+
+# Export All Plots
+
+Finally, we export all the generated visualizations to the `plots/` directory for use in the final report.
+
+```{r}
+# Export All Plots
+
+
+
+# ==============================================================================
+# Final Export Section
+# Description: Saves all 4 plot objects created above to the 'plots' folder.
+# ==============================================================================
+
+# 1. Ensure output directory exists
+output_dir <- here("plots")
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
+  cat("Created output directory:", output_dir, "\n")
+}
+
+# 2. Save Hsinchu Plots
+# (Bar Plot)
+ggsave(file.path(output_dir, "hsinchu_bar_english.png"), 
+       plot = p_hsinchu_bar, width = 12, height = 8, dpi = 300, bg = "white")
+
+# (Heatmap Map)
+ggsave(file.path(output_dir, "hsinchu_map_english.png"), 
+       plot = hsinchu_map, width = 12, height = 8, dpi = 300, bg = "white")
+
+# 3. Save Taipei Plots
+# (Bar Plot)
+ggsave(file.path(output_dir, "taipei_bar_english.png"), 
+       plot = p_taipei_bar, width = 12, height = 8, dpi = 300, bg = "white")
+
+# (Heatmap Map)
+ggsave(file.path(output_dir, "taipei_map_english.png"), 
+       plot = taipei_map, width = 12, height = 8, dpi = 300, bg = "white")
+
+cat("\nSUCCESS: All 4 plots have been saved to:", output_dir, "\n")
+```

@@ -250,10 +250,6 @@ ggplot(
 ```
 
 ```{r}
-# =========================
-# Taipei City scatter plots with ENGLISH district labels
-# Add this block right AFTER you create taipei_core (before the two ggplot() calls)
-# =========================
 
 # Taipei district English lookup
 district_en <- c(
@@ -305,9 +301,6 @@ ggplot(
   ) +
   theme_minimal()
 
-# =========================
-# Plot 2: Quadrant plot, English labels
-# =========================
 taipei_quadrant_en <- taipei_core_en %>%
   mutate(
     Price_Tier = ntile(avg_price, 3),
@@ -363,10 +356,8 @@ ggplot(
   theme_minimal()
 
 ```
+
 ```{r}
-# =========================
-# Taipei City scatter plot (ENGLISH labels) + LM with shaded 95% CI band
-# =========================
 
 # Taipei district English lookup
 district_en <- c(
@@ -384,7 +375,6 @@ district_en <- c(
   "北投區" = "Beitou District"
 )
 
-# Create an English label column (fallback to Chinese if unmatched)
 taipei_core_en <- taipei_core %>%
   mutate(
     District = str_replace_all(District, "台", "臺"),
@@ -430,4 +420,3 @@ ggplot(
   theme_minimal()
 
 ```
-
