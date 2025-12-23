@@ -13,8 +13,6 @@
 ```
 PBAG2/
 ├── data/
-│   ├── map/
-│   │   └── ?
 │   │
 │   ├── geo/
 │   │   ├── hsinchu_city_address_coordinates_202510.csv
@@ -38,8 +36,7 @@ PBAG2/
 │   └── aging_index_202412.csv
 │
 └── R/
-    ├── Aging_index_visualization.qmd
+    ├── Figure files (QMD)
     ├── load_data.R
-    ├── Real_estate_visualization.qmd
     └── setup.R
 ```
