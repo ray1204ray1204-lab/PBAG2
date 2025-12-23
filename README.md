@@ -6,16 +6,16 @@
 
 ## QMD Files
 
-QMD files are located in folder "R". It contains all of the code implementation
+QMD files are located in the `R` folder. It contains all of the code implementation
 for the visualization of the plots found in the final report document
 
 ## Plots
 
-Figures in image format are fount in the output folder
+Figures in image format are found in the `output` folder
 
 ## Datasets
 
-It contains the data used for the code implementation
+It contains the data used for the code implementation, located in `data` folder
 
 # Directory Structure
 
