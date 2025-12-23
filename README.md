@@ -2,20 +2,22 @@
 
  **PBA Group Project** for the Fall Semester 2025.  
 
-# QMD Files
+# File Directory
+
+## QMD Files
 
 QMD files are located in folder "R". It contains all of the code implementation
 for the visualization of the plots found in the final report document
 
-# Plots
+## Plots
 
 Figures in image format are fount in the output folder
 
-# Datasets
+## Datasets
 
 It contains the data used for the code implementation
 
-## Directory Structure
+# Directory Structure
 
 ```
 PBAG2/

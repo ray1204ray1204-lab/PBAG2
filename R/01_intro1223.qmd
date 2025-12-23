@@ -1,0 +1,259 @@
+---
+title: "01_intro"
+format: html
+editor: visual
+---
+
+```{R}
+# ==============================================================================
+# Project: Dependency Ratio Mapping (Path Fixed Version)
+# Author: PBAG2
+# Date: 2025-12-03
+# Description: 
+#   1. Generates English Maps with Values.
+#   2. Fixed path issues by defining project root explicitly.
+# ==============================================================================
+
+rm(list = ls()) # Clear environment
+
+# 1. Setup & Libraries
+# ------------------------------------------------------------------------------
+packages <- c("readr", "dplyr", "stringr", "ggplot2", "sf", "viridis", "here", "ggrepel")
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Theme
+my_theme_map <- theme_void(base_family = "Arial") +
+  theme(
+    plot.title = element_text(face = "bold", size = 22, hjust = 0.5),
+    plot.subtitle = element_text(size = 16, color = "grey40", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.caption = element_text(size = 10, color = "grey60", hjust = 1)
+  )
+
+# Define Project Root Explicitly (強制指定專案根目錄)
+project_root <- "C:/Users/ray12/PBAG2"
+output_dir <- file.path(project_root, "output", "maps_eng_labeled")
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# ------------------------------------------------------------------------------
+# 2. Define Translation Dictionaries
+# ------------------------------------------------------------------------------
+
+# 2.1 Region (County) Dictionary
+county_dict <- c(
+  "臺北市" = "Taipei City",      "新北市" = "New Taipei City",
+  "基隆市" = "Keelung City",     "桃園市" = "Taoyuan City",
+  "新竹市" = "Hsinchu City",     "新竹縣" = "Hsinchu County",
+  "苗栗縣" = "Miaoli County",    "臺中市" = "Taichung City",
+  "彰化縣" = "Changhua County",  "南投縣" = "Nantou County",
+  "雲林縣" = "Yunlin County",    "嘉義市" = "Chiayi City",
+  "嘉義縣" = "Chiayi County",    "臺南市" = "Tainan City",
+  "高雄市" = "Kaohsiung City",   "屏東縣" = "Pingtung County",
+  "宜蘭縣" = "Yilan County",     "花蓮縣" = "Hualien County",
+  "臺東縣" = "Taitung County",   "澎湖縣" = "Penghu County",
+  "金門縣" = "Kinmen County",    "連江縣" = "Lienchiang County"
+)
+
+# 2.2 District Dictionary
+district_dict <- c(
+  "竹北市" = "Zhubei City",      "竹東鎮" = "Zhudong Township",
+  "新埔鎮" = "Xinpu Township",   "關西鎮" = "Guanxi Township",
+  "湖口鄉" = "Hukou Township",   "新豐鄉" = "Xinfeng Township",
+  "芎林鄉" = "Qionglin Township","橫山鄉" = "Hengshan Township",
+  "北埔鄉" = "Beipu Township",   "寶山鄉" = "Baoshan Township",
+  "峨眉鄉" = "Emei Township",    "尖石鄉" = "Jianshi Township",
+  "五峰鄉" = "Wufeng Township",  "東區"   = "East Dist.", 
+  "北區"   = "North Dist.",      "香山區" = "Xiangshan Dist.",
+  "中正區" = "Zhongzheng Dist.", "大同區" = "Datong Dist.",
+  "中山區" = "Zhongshan Dist.",  "松山區" = "Songshan Dist.",
+  "大安區" = "Da'an Dist.",      "萬華區" = "Wanhua Dist.",
+  "信義區" = "Xinyi Dist.",      "士林區" = "Shilin Dist.",
+  "北投區" = "Beitou Dist.",     "內湖區" = "Neihu Dist.",
+  "南港區" = "Nangang Dist.",    "文山區" = "Wenshan Dist.",
+  "板橋區" = "Banqiao Dist.",    "三重區" = "Sanchong Dist.",
+  "中和區" = "Zhonghe Dist.",    "永和區" = "Yonghe Dist.",
+  "新莊區" = "Xinzhuang Dist.",  "新店區" = "Xindian Dist.",
+  "土城區" = "Tucheng Dist.",    "蘆洲區" = "Luzhou Dist.",
+  "汐止區" = "Xizhi Dist.",      "樹林區" = "Shulin Dist.",
+  "淡水區" = "Tamsui Dist.",     "鶯歌區" = "Yingge Dist.",
+  "三峽區" = "Sanxia Dist.",     "五股區" = "Wugu Dist.",
+  "泰山區" = "Taishan Dist.",    "林口區" = "Linkou Dist.",
+  "深坑區" = "Shenkeng Dist.",   "石碇區" = "Shiding Dist.",
+  "坪林區" = "Pinglin Dist.",    "三芝區" = "Sanzhi Dist.",
+  "石門區" = "Shimen Dist.",     "八里區" = "Bali Dist.",
+  "平溪區" = "Pingxi Dist.",     "雙溪區" = "Shuangxi Dist.",
+  "貢寮區" = "Gongliao Dist.",   "金山區" = "Jinshan Dist.",
+  "萬里區" = "Wanli Dist.",      "烏來區" = "Wulai Dist.",
+  "瑞芳區" = "Ruifang Dist."
+)
+
+translate_region <- function(x) {
+  res <- county_dict[x]
+  ifelse(is.na(res), x, res)
+}
+
+translate_district <- function(x) {
+  res <- district_dict[x]
+  ifelse(is.na(res), x, res)
+}
+
+# ------------------------------------------------------------------------------
+# 3. Load Data & Shapefile (Fix Path Here)
+# ------------------------------------------------------------------------------
+cat("\n[1/4] Loading Data...\n")
+
+# 定義絕對路徑
+csv_path <- file.path(project_root, "data", "population_index", "aging_index_202412.csv")
+shp_path <- file.path(project_root, "data", "map", "TOWN_MOI_1140318.shp")
+
+# 檢查檔案是否存在
+if (!file.exists(csv_path)) stop(paste("Error: File not found ->", csv_path))
+if (!file.exists(shp_path)) stop(paste("Error: File not found ->", shp_path))
+
+# 3.1 Load Aging Data
+df_aging_raw <- read_csv(csv_path, skip = 1, show_col_types = FALSE)
+colnames(df_aging_raw) <- c("CID", "COUNTY", "TID", "TOWN", "M_F", "PH", "PDEN", 
+                            "DEP_RAT", "YOUNG_RAT", "OLD_RAT", "AGING_IDX", "TIME")
+
+aging_data <- df_aging_raw %>%
+  rename(Region_Chi = COUNTY, District_Chi = TOWN) %>%
+  mutate(
+    Dependency_Ratio = as.numeric(DEP_RAT),
+    Region_Chi = str_trim(Region_Chi),
+    District_Chi = str_trim(District_Chi)
+  ) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  select(Region_Chi, District_Chi, Dependency_Ratio)
+
+# 3.2 Load Shapefile
+tw_town_sf <- st_read(shp_path, quiet = TRUE) 
+
+# --- CRITICAL FIX: Manually create English columns using dictionaries ---
+tw_town_sf <- tw_town_sf %>%
+  rename(Region_Chi = COUNTYNAME, District_Chi = TOWNNAME) %>%
+  mutate(Region_Chi = str_replace_all(Region_Chi, "台", "臺")) %>%
+  rowwise() %>%
+  mutate(
+    Region_Eng = translate_region(Region_Chi),
+    District_Eng = translate_district(District_Chi)
+  ) %>%
+  ungroup()
+
+# 3.3 Merge Data
+map_data_all <- tw_town_sf %>%
+  left_join(aging_data, by = c("Region_Chi", "District_Chi")) %>%
+  mutate(
+    Label_Text = paste0(District_Eng, "\n", round(Dependency_Ratio, 1), "%")
+  )
+
+cat("Data Merged. Total Districts:", nrow(map_data_all), "\n")
+
+# ------------------------------------------------------------------------------
+# 4. Generate National Map (English)
+# ------------------------------------------------------------------------------
+cat("\n[2/4] Generating National Map...\n")
+
+p_national <- ggplot(map_data_all) +
+  geom_sf(aes(fill = Dependency_Ratio), color = NA, size = 0.01) +
+  scale_fill_viridis_c(
+    option = "magma", 
+    direction = -1, 
+    name = "Dependency\nRatio (%)",
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "Dependency Ratio by District in Taiwan",
+    subtitle = "Higher Ratio indicates heavier burden on working population",
+    caption = "Source: Ministry of the Interior | Visualized by R"
+  ) +
+  my_theme_map +
+  coord_sf(
+    xlim = c(118.0, 122.4), 
+    ylim = c(21.8, 26.4)
+  )
+
+ggsave(file.path(output_dir, "Map_National_Eng.png"), 
+       p_national, width = 12, height = 16, bg = "white")
+
+# ------------------------------------------------------------------------------
+# 5. Generate County Maps (English Labels + Values)
+# ------------------------------------------------------------------------------
+cat("\n[3/4] Generating County Maps with English Labels & Values...\n")
+
+# Loop through regions that we have data for
+county_list <- unique(map_data_all$Region_Chi)
+county_list <- county_list[!is.na(county_list)]
+
+for (county_chi in county_list) {
+  
+  # Retrieve English name
+  county_eng <- map_data_all$Region_Eng[map_data_all$Region_Chi == county_chi][1]
+  
+  # Safe filename
+  filename_part <- str_replace_all(county_eng, " ", "")
+  
+  cat("  Processing:", county_eng, "...\n")
+  
+  # Filter
+  county_map_data <- map_data_all %>% filter(Region_Chi == county_chi)
+  
+  # Centroids
+  county_centroids <- suppressWarnings(st_centroid(county_map_data))
+  coords <- st_coordinates(county_centroids)
+  county_map_data <- cbind(county_map_data, coords)
+  
+  # Plot
+  p <- ggplot(county_map_data) +
+    geom_sf(aes(fill = Dependency_Ratio), color = "white", size = 0.2) +
+    
+    geom_text_repel(
+      aes(x = X, y = Y, label = Label_Text),
+      size = 3,
+      family = "Arial",
+      fontface = "bold",
+      color = "black",
+      bg.color = "white",
+      bg.r = 0.15,
+      lineheight = 0.8,
+      min.segment.length = 0,
+      force = ifelse(county_eng %in% c("Kaohsiung City", "Taipei City", "New Taipei City"), 2, 5),
+      max.overlaps = 30
+    ) +
+    
+    scale_fill_viridis_c(
+      option = "magma", 
+      direction = -1, 
+      name = "Dep. Ratio (%)",
+      na.value = "grey90"
+    ) +
+    
+    labs(
+      title = paste(county_eng, "- Dependency Ratio"),
+      subtitle = "District Name / Percentage (%)",
+      caption = "PBAG2 Analysis"
+    ) +
+    my_theme_map
+  
+  # Zoom Logic
+  if (county_chi == "高雄市") {
+    p <- p + coord_sf(xlim = c(120.15, 121.10), ylim = c(22.40, 23.50))
+  } else if (county_chi == "宜蘭縣") {
+    p <- p + coord_sf(xlim = c(121.30, 122.05), ylim = c(24.28, 25.02))
+  }
+  
+  ggsave(file.path(output_dir, paste0("Map_", filename_part, "_Eng.png")), 
+         p, width = 10, height = 10, bg = "white")
+}
+
+cat("\n[4/4] All Done! Check 'output/maps_eng_labeled' folder.\n")
+```
