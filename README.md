@@ -2,11 +2,18 @@
 
  **PBA Group Project** for the Fall Semester 2025.  
 
-# Final Report Google Docs
+# QMD Files
 
-[https://docs.google.com/document/d/1Vk-OrHHNtGhHAGBT9LR5v8Ffv_rXLs71fQUtrqPSIPY/edit?usp=sharing](https://docs.google.com/document/d/1Vk-OrHHNtGhHAGBT9LR5v8Ffv_rXLs71fQUtrqPSIPY/edit?usp=sharing)
+QMD files are located in folder "R". It contains all of the code implementation
+for the visualization of the plots found in the final report document
 
----
+# Plots
+
+Figures in image format are fount in the output folder
+
+# Datasets
+
+It contains the data used for the code implementation
 
 ## Directory Structure
 
